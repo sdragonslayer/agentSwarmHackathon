@@ -1,0 +1,47 @@
+# Source definitions for `uv run python -m backend.ingest.fetch`.
+# Nothing here is downloaded automatically; the user runs the fetch commands (see docs/DATA.md).
+
+[wiki]
+description = "German message-board export published at collusion.wiki"
+base_url = "https://collusion.wiki/explorer/download/"
+files = [
+  "revisions.jsonl.gz",
+  "events.jsonl.gz",
+  "manifest.json.gz",
+  "pages.jsonl.gz",
+  "labels.jsonl.gz",
+]
+terms = "Public download; redistribution rights unconfirmed. Do not commit data/ to a public repo."
+
+# Decompressed SHA-256 values from the snapshot inspected in the brief (manifest generated 2026-09-03).
+# A mismatch is a warning: record the new snapshot and reconcile counts instead of forcing a match.
+[wiki.reference_sha256]
+"revisions.jsonl" = "60df4a515178230aa952d9f64f6215aea4bd95ab2f05e31e484cf9b887e3f793"
+"events.jsonl" = "588584295f1c4a7c3d90b04075ab151504f165ff069534d935cda08853ec28b1"
+
+[transluce]
+description = "Transluce urlquery agent-activity report metadata"
+url = "https://transluce.org/data/urlquery-agent-activity-2026-09-23.zip"
+# Only these members are extracted (glob patterns matched against the member's file name).
+keep = ["all-reports.csv", "README*"]
+max_uncompressed_bytes = 2_000_000_000
+terms = "See README inside the archive; attribute Transluce."
+
+[swarmtraces]
+description = "SwarmTraces redacted payload release (Hugging Face intrusion)"
+# NOT VERIFIED: copy the redacted JSONL.gz download link from https://swarmtraces.org/viewer/ and paste it here.
+url = ""
+terms = "Check the viewer page for license terms before redistribution."
+
+[aivillage]
+description = "AI Village transcript database (gated Hugging Face dataset)"
+repo_id = "aidigestorg/ai-village"
+card_url = "https://huggingface.co/datasets/aidigestorg/ai-village"
+# Columns matching these patterns (case-insensitive regex) or with binary types are never downloaded.
+exclude_column_patterns = ["screenshot", "image", "png", "jpe?g", "base64", "bytes", "blob"]
+# Table guesses. Confirm against docs/aivillage_schema.md after `fetch aivillage schema`, then edit.
+text_tables = ["chat", "messages", "memories", "memory", "goals", "changelog", "scaffold"]
+computer_use_table = "turns"
+# Safety cap for a single text/slice pull; larger estimates require --yes plus --max-gb.
+default_max_gb = 5.0
+terms = "Research terms: no training/fine-tuning without written permission, no re-identification, attribute AI Village, notify on publication."

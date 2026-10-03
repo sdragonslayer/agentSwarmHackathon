@@ -1,0 +1,47 @@
+# ---------------------------------------------------------------- Python / uv
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# ---------------------------------------------------------------- Secrets
+.env
+.env.*
+!.env.example
+
+# ---------------------------------------------------------------- Data (never commit)
+# Datasets, streamed slices, DuckDB files and LLM caches. AI Village is gated;
+# redistribution rights for the other sources are unconfirmed.
+data/
+*.part
+*.duckdb
+*.duckdb.wal
+*.parquet
+*.jsonl.gz
+*.zip
+# Small synthetic test fixtures are fine to commit.
+!fixtures/**
+# Dataset card copied from the gated HF repo.
+docs/aivillage_card.md
+
+# ---------------------------------------------------------------- Frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.local
+
+# ---------------------------------------------------------------- Tooling / OS
+.claude/settings.local.json
+.vscode/
+.idea/
+*.log
+Thumbs.db
+Desktop.ini
+.DS_Store

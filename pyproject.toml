@@ -1,0 +1,34 @@
+[project]
+name = "swarmscope"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=1.11.0",
+    "datasketch>=2.0.0",
+    "duckdb>=1.5.6",
+    "fastapi>=0.142.2",
+    "httpx>=0.28.1",
+    "huggingface-hub>=2.1.1",
+    "openai>=3.24.0",
+    "polars>=1.44.2",
+    "pyarrow>=25.0.1",
+    "pydantic>=2.13.5",
+    "python-dotenv>=1.2.4",
+    "rapidfuzz>=3.14.6",
+    "tenacity>=9.1.4",
+    "uvicorn>=0.54.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.10",
+]
