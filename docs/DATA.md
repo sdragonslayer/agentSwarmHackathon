@@ -41,18 +41,25 @@ Each real run writes a `SNAPSHOT.json` recording the URL, retrieval time, compre
 
 **SwarmTraces.** The download URL isn't verified, so it isn't hard-coded. Pass it with `--url` or set `[swarmtraces].url` in `config/sources.toml`. Most payloads have no native timestamp.
 
-**AI Village (~117 GB, mostly screenshots).** Nothing is downloaded in bulk:
-1. `schema` reads only the Parquet footers, then lists each table with its row count, columns, and the estimated size of a text-only pull. **Read `docs/aivillage_schema.md` and `docs/aivillage_card.md` before going further.** Table names are inferred from file paths. Correct `text_tables` / `computer_use_table` in `config/sources.toml` if they're wrong.
-2. `text` pulls the small text tables (chat, memories, goals, changelog). It prints which columns it drops and an estimated download size, then asks for confirmation. Use `--tables a b` to choose tables, `--dry-run` to preview, and `--yes` to skip the prompt.
-3. `slice` pulls a filtered window of a big table, for example computer-use turns for one goal/episode or time range:
-   ```powershell
-   uv run python -m backend.ingest.fetch aivillage slice --table turns `
-     --where-column goal_id --equals <id1> <id2> --dry-run
-   uv run python -m backend.ingest.fetch aivillage slice --table turns `
-     --time-column timestamp --start 2026-05-01 --end 2026-05-08 --dry-run
-   ```
-   Column names here are examples; use the real ones from the schema doc. Drop `--dry-run` once the estimate looks right. Pick episodes from the `text` output before pulling slices.
-   Pulls estimated above `default_max_gb` (5 GB) are refused unless you pass `--yes --max-gb N`.
+**AI Village (~117 GB, mostly screenshots).** The release is JSONL tables plus per-day screenshot tars, not Parquet,
+so the `fetch aivillage ...` commands do not apply. Download only the text tables (a few GB):
+
+```powershell
+uv run hf download aidigestorg/ai-village --repo-type dataset --local-dir data/raw/aivillage `
+  --include "village-transcript.json" "README.md" "events.jsonl.gz" "chat_messages.jsonl.gz" `
+  "chat_rooms.jsonl.gz" "agents.jsonl.gz" "villages.jsonl.gz" "village_goals.jsonl.gz" `
+  "agent_goals.jsonl.gz" "computer_use_sessions.jsonl.gz" "agent_memories.jsonl.gz" "summaries.jsonl.gz"
+```
+
+Then build (all local, offline; the database is ~8-10 GB):
+
+```powershell
+uv run python -m backend.ingest.aivillage        # raw tables -> data/derived/swarm.duckdb
+uv run python -m backend.analysis.build          # lineage, artifacts, edges
+uv run python -m backend.analysis.validate       # integrity gates
+```
+
+What was verified about these files is in `docs/aivillage_findings.md`.
 
 The research terms prohibit training/fine-tuning without written permission and prohibit re-identification. They also require attribution and ask for notification on publication.
 

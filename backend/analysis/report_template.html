@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SwarmScope results</title>
+<style>
+:root { color-scheme: light; }
+.viz-root {
+  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,0.10);
+  --s1: #2a78d6; --s2: #eb6834; --seq-hi: #184f95; --seq-lo: #cde2fb;
+  --good-ink: #006300;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) .viz-root {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10);
+    --s1: #3987e5; --s2: #d95926; --seq-hi: #86b6ef; --seq-lo: #104281; --good-ink: #0ca30c;
+  }
+}
+:root[data-theme="dark"] .viz-root {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10);
+  --s1: #3987e5; --s2: #d95926; --seq-hi: #86b6ef; --seq-lo: #104281; --good-ink: #0ca30c;
+}
+body { margin: 0; }
+.viz-root { background: var(--page); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  padding: 32px 24px 64px; min-height: 100vh; }
+main { max-width: 1040px; margin: 0 auto; }
+h1 { font-size: 24px; font-weight: 600; margin: 0 0 4px; }
+h2 { font-size: 16px; font-weight: 600; margin: 40px 0 4px; }
+.sub { color: var(--ink2); margin: 0 0 16px; max-width: 760px; }
+.note { color: var(--muted); font-size: 12px; }
+.card { background: var(--surface); border: 1px solid var(--ring); border-radius: 12px; padding: 20px; margin-top: 12px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin-top: 16px; }
+.kpi { background: var(--surface); border: 1px solid var(--ring); border-radius: 12px; padding: 16px 20px; }
+.kpi .v { font-size: 28px; font-weight: 600; }
+.kpi .l { color: var(--ink2); font-size: 13px; }
+.kpi .d { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.hero { background: var(--surface); border: 1px solid var(--ring); border-radius: 12px; padding: 24px 28px; margin-top: 16px; }
+.hero .v { font-size: 56px; font-weight: 600; line-height: 1.1; }
+.hero .l { color: var(--ink2); max-width: 640px; }
+.legend { display: flex; gap: 20px; flex-wrap: wrap; margin: 4px 0 12px; color: var(--ink2); font-size: 12px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.key { display: inline-block; width: 14px; height: 0; }
+svg text { fill: var(--ink2); font: 12px system-ui, -apple-system, "Segoe UI", sans-serif; }
+svg .val { fill: var(--ink); font-weight: 600; }
+svg .muted { fill: var(--muted); }
+details { margin-top: 12px; }
+summary { cursor: pointer; color: var(--ink2); font-size: 12px; }
+table { border-collapse: collapse; width: 100%; margin-top: 8px; font-size: 12px; }
+th, td { text-align: left; padding: 6px 10px 6px 0; border-bottom: 1px solid var(--grid); vertical-align: top; }
+th { color: var(--ink2); font-weight: 600; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+code { font: 12px ui-monospace, "Cascadia Mono", Consolas, monospace; word-break: break-all; }
+.filters { display: flex; gap: 12px; align-items: center; margin: 12px 0; flex-wrap: wrap; }
+select { background: var(--surface); color: var(--ink); border: 1px solid var(--axis); border-radius: 8px; padding: 6px 10px;
+  font: inherit; max-width: 100%; }
+.pill { display: inline-block; border: 1px solid var(--axis); border-radius: 999px; padding: 0 8px; font-size: 11px;
+  color: var(--ink2); }
+.q { padding: 10px 0; border-bottom: 1px solid var(--grid); }
+.q .st { font-size: 11px; color: var(--ink2); border: 1px solid var(--axis); border-radius: 999px; padding: 0 8px;
+  margin-right: 8px; white-space: nowrap; }
+.q .qq { font-weight: 600; }
+.q .cl { margin: 4px 0 0; }
+.mk { background: color-mix(in srgb, var(--s1) 22%, transparent); border-radius: 3px; padding: 0 2px; }
+#tip { position: fixed; pointer-events: none; z-index: 10; background: var(--surface); color: var(--ink);
+  border: 1px solid var(--axis); border-radius: 8px; padding: 8px 10px; max-width: 420px; font-size: 12px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.18); display: none; }
+#tip .t1 { font-weight: 600; }
+#tip .t2 { color: var(--ink2); }
+#tip .sn { margin-top: 4px; color: var(--ink2); white-space: pre-wrap; word-break: break-word; }
+.dot:focus { outline: none; }
+.dot:focus-visible { stroke: var(--ink); stroke-width: 2; }
+</style>
+</head>
+<body>
+<div class="viz-root">
+<main>
+  <h1>SwarmScope: AI Village results</h1>
+  <p class="sub" id="scope"></p>
+
+  <div class="hero">
+    <div class="v" id="hero-v"></div>
+    <div class="l" id="hero-l"></div>
+  </div>
+  <div class="kpis" id="kpis"></div>
+
+  <h2>How much repeated text inflates apparent spread</h2>
+  <p class="sub">Agents rewrite their memory notes and session goals again and again, and each rewrite repeats most of
+    the previous text. Counting every repeat as a new appearance overstates how often anything appears. This is
+    <b>occurrence inflation</b>: a count of text occurrences, not an estimate of false transmission.</p>
+
+  <div class="card">
+    <div style="font-weight:600">Share of lines carried forward from the previous version</div>
+    <div class="note">Each bar is one text stream; lines are non-blank lines of every item in the stream.</div>
+    <div class="legend"><span><i class="key" style="border-top:8px solid var(--s2)"></i>Carried forward</span>
+      <span><i class="key" style="border-top:8px solid var(--s1)"></i>Not carried forward (new, edited, restored, or first seen)</span></div>
+    <div id="chart-lines"></div>
+    <details><summary>Table view</summary><div id="table-lines"></div></details>
+  </div>
+
+  <div class="card">
+    <div style="font-weight:600">Artifact occurrences: full text vs new text only</div>
+    <div class="note">For each artifact type, how many occurrences exist in all text vs in non-inherited text.</div>
+    <div class="legend"><span><i class="key" style="border-top:8px solid var(--s2)"></i>Full text (carryover included)</span>
+      <span><i class="key" style="border-top:8px solid var(--s1)"></i>New text only</span></div>
+    <div id="chart-types"></div>
+    <details><summary>Table view</summary><div id="table-types"></div></details>
+  </div>
+
+  <div class="card">
+    <div style="font-weight:600">Most inflated artifacts</div>
+    <div class="note">Artifacts with at least 20 full-text occurrences, ranked by full ÷ new occurrences.</div>
+    <div id="table-top"></div>
+  </div>
+
+  <h2>Inspect a case</h2>
+  <p class="sub">Pick an artifact to see every place it appears, who wrote it, which copies are new text and which
+    are carried-forward or restored, and which links between appearances the data supports. Author labels are not
+    verified agents.</p>
+  <div class="filters"><label for="case-sel">Case</label><select id="case-sel"></select>
+    <span class="pill" id="case-kind"></span></div>
+
+  <div class="card">
+    <div id="case-title" style="font-weight:600"></div>
+    <div class="note" id="case-counts"></div>
+    <div class="legend">
+      <span><svg width="14" height="14"><circle cx="7" cy="7" r="5" fill="var(--s1)"/></svg>New text</span>
+      <span><svg width="14" height="14"><circle cx="7" cy="7" r="4" fill="none" stroke="var(--muted)" stroke-width="2"/></svg>Restored copy</span>
+      <span><svg width="26" height="8"><line x1="0" y1="4" x2="26" y2="4" stroke="var(--ink2)" stroke-width="2"/></svg>Same exact string</span>
+      <span><svg width="26" height="8"><line x1="0" y1="4" x2="26" y2="4" stroke="var(--ink2)" stroke-width="2" stroke-dasharray="5 4"/></svg>Similar wording (candidate)</span>
+    </div>
+    <div id="chart-case"></div>
+    <div class="note">Dots are placed by recorded database time, whose clock uncertainty the source does not give. Lines are
+      undirected: even an exact shared string does not prove one label influenced another.</div>
+    <details><summary>Table view</summary><div id="table-case"></div></details>
+  </div>
+
+  <div class="card">
+    <div style="font-weight:600">Investigation questions</div>
+    <div id="questions"></div>
+  </div>
+  <p class="note" id="foot"></p>
+</main>
+</div>
+<div id="tip" role="tooltip"></div>
+<script>
+const DATA = /*__DATA__*/null;
+const NS = "http://www.w3.org/2000/svg";
+const $ = (id) => document.getElementById(id);
+const fmt = (n) => Number(n).toLocaleString("en-US");
+const pct = (x) => (x * 100).toFixed(1) + "%";
+
+function h(tag, props, text) {
+  const e = document.createElement(tag);
+  if (props) for (const [k, v] of Object.entries(props)) e.setAttribute(k, v);
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+function s(tag, props, text) {
+  const e = document.createElementNS(NS, tag);
+  if (props) for (const [k, v] of Object.entries(props)) e.setAttribute(k, v);
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+function clip(str, n) { str = String(str); return str.length > n ? str.slice(0, n - 1) + "…" : str; }
+
+// ---- tooltip (textContent only; same content on hover and keyboard focus) ----
+const tip = $("tip");
+function showTip(evt, rows, snippet) {
+  tip.replaceChildren();
+  rows.forEach(([cls, text]) => tip.appendChild(h("div", { class: cls }, text)));
+  if (snippet) {
+    const p = h("div", { class: "sn" });
+    p.appendChild(document.createTextNode(snippet.before));
+    p.appendChild(h("span", { class: "mk" }, snippet.match));
+    p.appendChild(document.createTextNode(snippet.after));
+    tip.appendChild(p);
+  }
+  tip.style.display = "block";
+  const r = evt.currentTarget.getBoundingClientRect();
+  const x = evt.clientX || r.left + r.width / 2, y = evt.clientY || r.top;
+  const w = tip.offsetWidth, hh = tip.offsetHeight;
+  tip.style.left = Math.max(8, Math.min(x + 14, window.innerWidth - w - 8)) + "px";
+  tip.style.top = Math.max(8, Math.min(y + 14, window.innerHeight - hh - 8)) + "px";
+}
+function hideTip() { tip.style.display = "none"; }
+function hoverable(node, rows, snippet) {
+  node.addEventListener("pointermove", (e) => showTip(e, rows, snippet));
+  node.addEventListener("pointerleave", hideTip);
+  node.addEventListener("focus", (e) => showTip(e, rows, snippet));
+  node.addEventListener("blur", hideTip);
+}
+
+function table(cols, rows) {
+  const t = h("table"), thead = h("thead"), tr = h("tr");
+  cols.forEach((c) => tr.appendChild(h("th", c.num ? { class: "num" } : {}, c.label)));
+  thead.appendChild(tr); t.appendChild(thead);
+  const tb = h("tbody");
+  rows.forEach((r) => {
+    const row = h("tr");
+    cols.forEach((c) => {
+      const td = h("td", c.num ? { class: "num" } : {});
+      const v = c.get(r);
+      if (c.code) td.appendChild(h("code", null, v)); else td.textContent = v;
+      row.appendChild(td);
+    });
+    tb.appendChild(row);
+  });
+  t.appendChild(tb);
+  return t;
+}
+
+// ---- header, hero, KPIs ----
+const inf = DATA.inflation;
+$("scope").textContent = "Source: " + DATA.snapshot.source + " snapshot " + DATA.snapshot.snapshot_id +
+  ". Scope: all loaded text tables (computer-use turns, Claude Code messages and screenshots are not loaded). " +
+  "LLM-generated summaries are excluded.";
+const lineTot = inf.line_level_by_stream.reduce((a, r) => ({ lines: a.lines + r.lines, inh: a.inh + r.inherited_lines }),
+  { lines: 0, inh: 0 });
+$("hero-v").textContent = lineTot.lines ? pct(lineTot.inh / lineTot.lines) : "n/a";
+$("hero-l").textContent = "of " + fmt(lineTot.lines) + " lines in agent memories and session goals are carried forward " +
+  "unchanged from the same label's previous version. They are not new utterances.";
+const urlType = inf.artifact_level_by_type.find((t) => t.artifact_type === "url");
+const kp = [
+  ["Events loaded", fmt(DATA.scope.event), "source timeline, with gaps in event_index"],
+  ["Text items", fmt(DATA.scope.text_item), "chat, memories, goals and session summaries"],
+  ["Author labels", fmt(DATA.scope.actor_label), "labels, not verified agents"],
+  ["URL occurrence inflation", urlType && urlType.occurrence_inflation ? urlType.occurrence_inflation + "×" : "n/a",
+    urlType ? fmt(urlType.full_occurrences) + " in full text vs " + fmt(urlType.novel_occurrences) + " in new text" : ""],
+];
+kp.forEach(([l, v, d]) => {
+  const k = h("div", { class: "kpi" });
+  k.append(h("div", { class: "l" }, l), h("div", { class: "v" }, v), h("div", { class: "d" }, d));
+  $("kpis").appendChild(k);
+});
+
+// ---- chart: carried-forward share per stream (100% stacked horizontal bars) ----
+const STREAM_NAMES = { mem: "Agent memories", sgoal: "Computer-use session goals" };
+function renderLines() {
+  const rows = inf.line_level_by_stream;
+  const W = 960, L = 200, R = 70, BAR = 24, GAP = 22, top = 8, H = top + rows.length * (BAR + GAP) + 24;
+  const svg = s("svg", { viewBox: "0 0 " + W + " " + H, width: "100%", role: "img",
+    "aria-label": "Share of lines carried forward, by text stream" });
+  const pw = W - L - R;
+  [0, 0.25, 0.5, 0.75, 1].forEach((t) => {
+    const x = L + t * pw;
+    svg.appendChild(s("line", { x1: x, x2: x, y1: top, y2: H - 22, stroke: "var(--grid)", "stroke-width": 1 }));
+    svg.appendChild(s("text", { x, y: H - 6, "text-anchor": "middle", class: "muted" }, pct(t).replace(".0", "")));
+  });
+  rows.forEach((r, i) => {
+    const y = top + i * (BAR + GAP) + GAP / 2;
+    const inh = r.lines ? r.inherited_lines / r.lines : 0, w1 = inh * pw;
+    svg.appendChild(s("text", { x: L - 12, y: y + BAR / 2 + 4, "text-anchor": "end" }, STREAM_NAMES[r.stream] || r.stream));
+    const a = s("rect", { x: L, y, width: Math.max(w1 - 1, 0), height: BAR, fill: "var(--s2)", rx: 4, tabindex: 0 });
+    const b = s("rect", { x: L + w1 + 1, y, width: Math.max(pw - w1 - 1, 0), height: BAR, fill: "var(--s1)", rx: 4, tabindex: 0 });
+    hoverable(a, [["t1", fmt(r.inherited_lines) + " lines carried forward"], ["t2", pct(inh) + " of " + fmt(r.lines) + " lines in " + fmt(r.items) + " items"]]);
+    hoverable(b, [["t1", fmt(r.novel_lines + r.restored_lines) + " lines not carried forward"], ["t2", pct(1 - inh) + " (new, edited, restored, or first seen)"]]);
+    svg.append(a, b);
+    if (w1 > 80) svg.appendChild(s("text", { x: L + 10, y: y + BAR / 2 + 4, class: "val", style: "fill:#fff" }, pct(inh)));
+    else svg.appendChild(s("text", { x: L + w1 + 8, y: y + BAR / 2 + 4, class: "val" }, pct(inh)));
+  });
+  $("chart-lines").replaceChildren(svg);
+  $("table-lines").replaceChildren(table([
+    { label: "Stream", get: (r) => STREAM_NAMES[r.stream] || r.stream }, { label: "Items", num: 1, get: (r) => fmt(r.items) },
+    { label: "Lines", num: 1, get: (r) => fmt(r.lines) }, { label: "Carried forward", num: 1, get: (r) => fmt(r.inherited_lines) },
+    { label: "Not carried forward", num: 1, get: (r) => fmt(r.novel_lines + r.restored_lines) },
+    { label: "Carried share", num: 1, get: (r) => (r.inherited_share === null ? "n/a" : pct(r.inherited_share)) },
+  ], rows));
+}
+
+// ---- chart: full vs novel occurrences per artifact type (grouped horizontal bars, shared linear axis) ----
+function renderTypes() {
+  const rows = inf.artifact_level_by_type;
+  const W = 960, L = 200, R = 210, BAR = 18, G = 3, GAP = 22, top = 8;
+  const H = top + rows.length * (2 * BAR + G + GAP) + 6;
+  const max = Math.max(1, ...rows.map((r) => r.full_occurrences));
+  const pw = W - L - R;
+  const svg = s("svg", { viewBox: "0 0 " + W + " " + H, width: "100%", role: "img",
+    "aria-label": "Artifact occurrences in full text versus new text, by type" });
+  const NAMES = { url: "URLs", hex_id: "Hex ids (commit-like)", repo_ref: "Repo refs (owner/repo#N)" };
+  rows.forEach((r, i) => {
+    const y = top + i * (2 * BAR + G + GAP);
+    svg.appendChild(s("text", { x: L - 12, y: y + BAR + 2, "text-anchor": "end" }, NAMES[r.artifact_type] || r.artifact_type));
+    [["full_occurrences", "var(--s2)", 0, "full text"], ["novel_occurrences", "var(--s1)", 1, "new text only"]].forEach(([k, col, j, name]) => {
+      const w = Math.max((r[k] / max) * pw, 2), yy = y + j * (BAR + G);
+      const bar = s("rect", { x: L, y: yy, width: w, height: BAR, fill: col, rx: 4, tabindex: 0 });
+      hoverable(bar, [["t1", fmt(r[k]) + " occurrences in " + name], ["t2", (NAMES[r.artifact_type] || r.artifact_type) + ": " + fmt(r.artifacts) + " distinct artifacts"]]);
+      svg.appendChild(bar);
+      svg.appendChild(s("text", { x: L + w + 8, y: yy + BAR - 5, class: "val" }, fmt(r[k])));
+    });
+    if (r.occurrence_inflation) svg.appendChild(s("text", { x: W - 4, y: y + BAR + 2, "text-anchor": "end", class: "muted" }, r.occurrence_inflation + "× inflation"));
+  });
+  svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+  $("chart-types").replaceChildren(svg);
+  $("table-types").replaceChildren(table([
+    { label: "Type", get: (r) => NAMES[r.artifact_type] || r.artifact_type }, { label: "Distinct", num: 1, get: (r) => fmt(r.artifacts) },
+    { label: "Full-text occurrences", num: 1, get: (r) => fmt(r.full_occurrences) },
+    { label: "New-text occurrences", num: 1, get: (r) => fmt(r.novel_occurrences) },
+    { label: "Inflation", num: 1, get: (r) => (r.occurrence_inflation === null ? "n/a" : r.occurrence_inflation + "×") },
+    { label: "In 2+ labels (full / new)", num: 1, get: (r) => fmt(r.artifacts_in_2plus_labels.full) + " / " + fmt(r.artifacts_in_2plus_labels.novel) },
+  ], rows));
+}
+
+function renderTop() {
+  const rows = inf.most_inflated_artifacts;
+  $("table-top").replaceChildren(rows.length ? table([
+    { label: "Artifact", code: 1, get: (r) => clip(r.raw, 90) }, { label: "Type", get: (r) => r.type },
+    { label: "Full", num: 1, get: (r) => fmt(r.full_occurrences) }, { label: "New", num: 1, get: (r) => fmt(r.novel_occurrences) },
+    { label: "Items full / new", num: 1, get: (r) => fmt(r.full_items) + " / " + fmt(r.novel_items) },
+    { label: "Labels full / new", num: 1, get: (r) => fmt(r.full_labels) + " / " + fmt(r.novel_labels) },
+  ], rows) : h("div", { class: "note" }, "No artifact has 20 or more full-text occurrences."));
+}
+
+// ---- case: timeline lanes + explicit/candidate links ----
+const STATUS = { supported: "✓ supported", partial: "~ partial", unknown: "? unknown", conflicting: "≠ conflicting" };
+function renderCase(idx) {
+  const c = DATA.cases[idx];
+  hideTip();
+  $("case-kind").textContent = c.case_kind === "carryover" ? "carryover example (one label, many copies)" : "shared across labels (link, not proof of handoff)";
+  $("case-title").replaceChildren(document.createTextNode(c.type + ": "), h("code", null, clip(c.raw, 140)));
+  const k = c.counts;
+  $("case-counts").textContent = fmt(k.full_occurrences) + " occurrences in full text vs " + fmt(k.novel_occurrences) +
+    " in new text; " + fmt(k.novel_items) + " new-text items by " + fmt(k.novel_labels) + " author label(s)." +
+    (c.appearances.length >= 80 ? " Showing the first 80 appearances." : "");
+  const apps = c.appearances.filter((a) => a.time);
+  const undated = c.appearances.length - apps.length;
+  const labelCount = {};
+  c.appearances.forEach((a) => { labelCount[a.label] = (labelCount[a.label] || 0) + 1; });
+  let order = [];
+  c.appearances.forEach((a) => { if (!order.includes(a.label)) order.push(a.label); });
+  const MAXL = 10;
+  const lanes = order.slice(0, MAXL), laneOf = (l) => { const i = lanes.indexOf(l); return i < 0 ? lanes.length : i; };
+  const hasOther = order.length > MAXL; if (hasOther) lanes.push("other labels (" + (order.length - MAXL) + ")");
+  const W = 960, L = 230, R = 24, LH = 38, top = 14, H = top + lanes.length * LH + 40;
+  const times = apps.map((a) => Date.parse(a.time.replace(" ", "T") + "Z"));
+  const t0 = Math.min(...times), t1 = Math.max(...times, t0 + 1);
+  const x = (t) => L + ((t - t0) / (t1 - t0 || 1)) * (W - L - R);
+  const svg = s("svg", { viewBox: "0 0 " + W + " " + H, width: "100%", role: "img", "aria-label": "Appearances by author label over time" });
+  lanes.forEach((l, i) => {
+    const y = top + i * LH + LH / 2;
+    svg.appendChild(s("line", { x1: L, x2: W - R, y1: y, y2: y, stroke: "var(--grid)", "stroke-width": 1 }));
+    svg.appendChild(s("text", { x: L - 12, y: y + 4, "text-anchor": "end" }, clip(l, 30)));
+  });
+  for (let i = 0; i <= 4; i++) {
+    const t = t0 + ((t1 - t0) * i) / 4, xx = x(t);
+    svg.appendChild(s("line", { x1: xx, x2: xx, y1: H - 32, y2: H - 28, stroke: "var(--axis)", "stroke-width": 1 }));
+    const d = new Date(t).toISOString();
+    svg.appendChild(s("text", { x: xx, y: H - 12, "text-anchor": i === 0 ? "start" : i === 4 ? "end" : "middle", class: "muted" }, t1 - t0 > 2 * 86400000 ? d.slice(0, 10) : d.slice(0, 16).replace("T", " ")));
+  }
+  const pos = {};
+  apps.forEach((a, i) => {
+    if (!(a.item_id in pos)) pos[a.item_id] = { x: x(times[i]), y: top + laneOf(a.label) * LH + LH / 2 };
+  });
+  c.edges.forEach((e) => {
+    const p = pos[e.src], q = pos[e.dst];
+    if (!p || !q) return;
+    const ln = s("line", { x1: p.x, y1: p.y, x2: q.x, y2: q.y, stroke: "var(--ink2)", "stroke-width": 1.5,
+      "stroke-linecap": "round", opacity: 0.8 });
+    if (e.relation === "possible_reuse") ln.setAttribute("stroke-dasharray", "5 4");
+    svg.appendChild(ln);
+  });
+  apps.forEach((a, i) => {
+    const px = x(times[i]), py = top + laneOf(a.label) * LH + LH / 2;
+    const g = s("g", { class: "dot", tabindex: 0, role: "img",
+      "aria-label": a.label + ", " + a.novelty + ", " + a.time });
+    const restored = a.novelty === "restored";
+    g.appendChild(s("circle", { cx: px, cy: py, r: 12, fill: "transparent" }));
+    g.appendChild(s("circle", { cx: px, cy: py, r: restored ? 4 : 5, fill: restored ? "var(--surface)" : "var(--s1)",
+      stroke: restored ? "var(--muted)" : "var(--surface)", "stroke-width": restored ? 2 : 2 }));
+    hoverable(g, [["t1", a.label], ["t2", a.kind.replace(/_/g, " ") + " · " + a.novelty.replace(/_/g, " ") + " · " + a.time + (a.event_index ? " · event " + a.event_index : "")]], a.snippet);
+    svg.appendChild(g);
+  });
+  $("chart-case").replaceChildren(svg);
+  if (undated) $("chart-case").appendChild(h("div", { class: "note" }, undated + " appearance(s) have no recorded time and are not drawn; see the table view."));
+  $("table-case").replaceChildren(table([
+    { label: "Time", get: (a) => a.time || "unknown" }, { label: "Author label", get: (a) => a.label },
+    { label: "Kind", get: (a) => a.kind.replace(/_/g, " ") }, { label: "Text kind", get: (a) => a.novelty.replace(/_/g, " ") },
+    { label: "Context", code: 1, get: (a) => a.snippet.before.slice(-40) + a.snippet.match + a.snippet.after.slice(0, 40) },
+  ], c.appearances));
+  const qs = $("questions"); qs.replaceChildren();
+  c.answers.forEach((a) => {
+    const q = h("div", { class: "q" });
+    const top1 = h("div"); top1.append(h("span", { class: "st" }, STATUS[a.status] || a.status), h("span", { class: "qq" }, a.question));
+    q.append(top1, h("p", { class: "cl" }, a.claim));
+    if (a.limitations.length) {
+      const d = h("details"); d.appendChild(h("summary", null, "Limitations (" + a.limitations.length + ")"));
+      const ul = h("ul"); a.limitations.forEach((x) => ul.appendChild(h("li", null, x))); d.appendChild(ul); q.appendChild(d);
+    }
+    qs.appendChild(q);
+  });
+}
+
+renderLines(); renderTypes(); renderTop();
+const sel = $("case-sel");
+DATA.cases.forEach((c, i) => sel.appendChild(h("option", { value: i }, (i + 1) + ". " + clip(c.raw, 80) + " (" + c.counts.novel_labels + " labels)")));
+if (DATA.cases.length) { sel.addEventListener("change", () => renderCase(Number(sel.value))); renderCase(0); }
+else $("chart-case").textContent = "No cases found.";
+$("foot").textContent = "Report " + DATA.report_version + " generated " + DATA.generated_at + ". Contains corpus text: do not redistribute. " +
+  "Similarity and shared strings never establish causation; counts are author labels, not verified agents.";
+</script>
+</body>
+</html>

@@ -10,6 +10,10 @@ Evidence-backed provenance debugger for agent swarms, built for the AI Village Ã
 - `uv run ruff check backend tests`: lint (line length 120).
 - `uv run python -m backend.ingest.fetch <wiki|transluce|swarmtraces|aivillage ...> --dry-run`: print a fetch plan.
 - `uv run python -m backend.ingest.profile <file> [--group-by col]`: profile a local data file.
+- AI Village (local, offline; DB is ~8-10 GB, keep total new disk use under 20 GB):
+  `uv run python -m backend.ingest.aivillage`, then `uv run python -m backend.analysis.build`, then
+  `uv run python -m backend.analysis.validate`. Findings about the real files are in `docs/aivillage_findings.md`.
+- API: `uv run uvicorn backend.app.main:app` (reads `data/derived/swarm.duckdb`, or `SWARMSCOPE_DB`).
 
 Windows machine: the primary shell is PowerShell 5.1, so there's no `&&`. Node is not installed yet (it's needed for `frontend/`).
 
@@ -27,6 +31,10 @@ Windows machine: the primary shell is PowerShell 5.1, so there's no `&&`. Node i
 - Evidence tiers are `source_recorded | rule_derived | model_proposed | human_reviewed`. LLM output is `model_proposed`, and every quoted span must be verified to exist in its source.
 - Order is strict only for non-overlapping time intervals. Never use `archived_at` as action time, and never invent times to force a DAG.
 - Validate the wiki hunk offset convention against `body_sha256` before building on hunks.
+
+## Test-set plan
+- AI Village is large (events ~382k rows, chat ~183k, memories ~2.4 GB gz). Do initial testing against all of it.
+- We still need a much smaller test set that is quick to iterate on, likely drawn from another dataset (wiki, Transluce, or SwarmTraces) rather than a slice of AI Village. Pick it once those are downloaded.
 
 ## Layout
 `backend/ingest` (fetch + adapters), `backend/analysis` (lineage, artifacts, edges, chronology, questions, inflation), `backend/llm`, `backend/app` (FastAPI), `frontend/` (React + Vite + TS + Cytoscape), `config/sources.toml` (source URLs, reference hashes, AI Village table/column config), `docs/`, `eval/`, `cases/`, `tests/`.
