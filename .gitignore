@@ -45,3 +45,10 @@ frontend/.vite/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# ---------------------------------------------------------------- Local-only notes and write-ups
+# Kept on disk but not published: the README is the public entry point.
+docs/
+CLAUDE.md
+TODO.md
+SwarmScope_Coding_Agent_Brief.md

@@ -81,6 +81,23 @@ def score(key: dict, reviews: list[dict]) -> tuple[dict, str]:
                 tallies[name][0] += a1 == want
                 tallies["lineage (all classes)"][1] += 1
                 tallies["lineage (all classes)"][0] += a1 == want
+            elif sec == "cue":
+                for name, ok in ((f"cue lines: yes ({it['category']})", a1 == "yes"), ("cue lines: yes (all categories)", a1 == "yes"),
+                                 ("cue lines: yes or partly (all categories)", a1 in ("yes", "partly"))):
+                    tallies[name][1] += 1
+                    tallies[name][0] += ok
+            elif sec == "exchange":
+                tallies["exchanges: genuine reply (yes)"][1] += 1
+                tallies["exchanges: genuine reply (yes)"][0] += a1 == "yes"
+                tallies["exchanges: yes or partly"][1] += 1
+                tallies["exchanges: yes or partly"][0] += a1 in ("yes", "partly")
+                if r.get("a2"):
+                    extra["exchanges: carrying answers or timing"][1] += 1
+                    extra["exchanges: carrying answers or timing"][0] += r["a2"] in ("answers", "timing")
+            elif sec == "reference":
+                for name in (f"references: real pointer ({it['ref_type']})", "references: real pointer (all types)"):
+                    tallies[name][1] += 1
+                    tallies[name][0] += a1 == "yes"
             elif sec == "question":
                 name = f"answer '{it['question_id']}' correct"
                 tallies[name][1] += 1

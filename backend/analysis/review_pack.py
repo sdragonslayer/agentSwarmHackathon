@@ -1,4 +1,5 @@
-"""Build a human-review pack: sampled edges, artifact extractions, lineage lines and question answers.
+"""Build a human-review pack: sampled edges, artifact extractions, lineage lines, question answers, and (when the
+cue and reference steps have run) cue lines, request/reply exchanges and explicit references.
 
     uv run python -m backend.analysis.review_pack --db data/derived/swarm.duckdb --out data/derived/review
 
@@ -7,8 +8,8 @@ spreadsheet) and review_key.json (the system's claims; keep it away from reviewe
 The pack contains corpus text: keep it under data/derived/ and do not redistribute it.
 
 Sampling is seeded and stratified so a rerun on the same database gives the same items. Edges are sampled one per
-artifact so items are independent. Building the pack runs candidate retrieval for a few cases, which adds
-`possible_reuse` edges to the database.
+artifact so items are independent. Candidate retrieval (`possible_reuse`) only runs with --candidates and then
+adds those edges to the database.
 """
 
 from __future__ import annotations
@@ -22,16 +23,20 @@ from pathlib import Path
 import duckdb
 from rapidfuzz import fuzz, process
 
-from backend.analysis import candidates, questions
+from backend.analysis import candidates, questions, topics, traces
 from backend.db import DEFAULT_DB, connect
 
-PACK_VERSION = "review-pack-0.1"
+PACK_VERSION = "review-pack-0.2"
 SEED = "swarmscope-review-1"
 CTX = 220
 N_EDGE_URL, N_EDGE_HEX, N_EDGE_REPO, N_CAND_CASES = 20, 15, 5, 6
 N_EXTRACT = {"url": 20, "hex_id": 15, "repo_ref": 5}
 N_LINEAGE = {"inherited": 10, "new": 10, "modified": 10}
 N_QUESTION_ARTIFACTS = 10
+# per-source sample sizes (the wiki pack is smaller and adds cue/exchange/reference sections)
+WIKI_SIZES = {"edge": {"url": 14, "hex_id": 10}, "extract": {"url": 12, "hex_id": 8},
+              "lineage": {"inherited": 5, "new": 5, "modified": 5}, "cues": 36, "exchanges": 16, "references": 16,
+              "question_artifacts": 3, "qids": ("earliest", "spread", "references")}
 
 
 def _ctx(text: str, start: int, end: int) -> dict:
@@ -116,9 +121,9 @@ def sample_candidates(con, n_cases: int) -> list[dict]:
     return out
 
 
-def sample_extractions(con) -> list[dict]:
+def sample_extractions(con, n_by_type: dict | None = None) -> list[dict]:
     out = []
-    for atype, n in N_EXTRACT.items():
+    for atype, n in (n_by_type or N_EXTRACT).items():
         rows = con.execute(
             """
             SELECT a.artifact_id, a.item_id, a.span_start, a.span_end, a.novelty, x.raw
@@ -134,14 +139,14 @@ def sample_extractions(con) -> list[dict]:
     return out
 
 
-def sample_lineage(con) -> list[dict]:
+def sample_lineage(con, n_by_class: dict | None = None) -> list[dict]:
     out = []
-    for cls, n in N_LINEAGE.items():
+    for cls, n in (n_by_class or N_LINEAGE).items():
         if cls == "inherited":
             rows = con.execute(
                 """
                 SELECT l.item_id, l.base_item_id FROM lineage_summary l
-                WHERE l.lineage_status = 'inferred_predecessor' AND l.n_inherited > 0 AND l.stream_key LIKE 'mem:%'
+                WHERE l.lineage_status = 'inferred_predecessor' AND l.n_inherited > 0
                 ORDER BY md5(l.item_id || ?) LIMIT ?
                 """,
                 [SEED, n],
@@ -161,7 +166,7 @@ def sample_lineage(con) -> list[dict]:
                 """
                 SELECT c.item_id, c.base_item_id, c.line_no, c.text, c.classification, c.similarity
                 FROM text_change c JOIN lineage_summary l USING (item_id)
-                WHERE c.classification = ? AND l.stream_key LIKE 'mem:%' AND length(c.text) >= 25
+                WHERE c.classification = ? AND c.base_item_id IS NOT NULL AND length(c.text) >= 25
                 ORDER BY md5(c.item_id || c.line_no || ?) LIMIT ?
                 """,
                 [cls, SEED, n],
@@ -181,12 +186,14 @@ def sample_lineage(con) -> list[dict]:
     return out
 
 
-def sample_questions(con, artifact_ids: list[str]) -> list[dict]:
+def sample_questions(con, artifact_ids: list[str], qids=("earliest", "introducers"), n_artifacts: int = N_QUESTION_ARTIFACTS) -> list[dict]:
     out = []
-    for aid in artifact_ids[:N_QUESTION_ARTIFACTS]:
+    for aid in artifact_ids[:n_artifacts]:
         raw = con.execute("SELECT raw FROM artifact WHERE artifact_id = ?", [aid]).fetchone()[0]
         answers = {a["id"]: a for a in questions.answer_all(con, aid)}
-        for qid in ("earliest", "introducers"):
+        for qid in qids:
+            if qid not in answers:
+                continue
             a = answers[qid]
             out.append({"section": "question", "artifact_id": aid, "artifact": raw, "question_id": qid,
                         "question": a["question"], "claim": a["claim"], "status": a["status"],
@@ -194,12 +201,67 @@ def sample_questions(con, artifact_ids: list[str]) -> list[dict]:
     return out
 
 
-def build_items(con: duckdb.DuckDBPyConnection) -> list[dict]:
+def sample_cues(con, n: int) -> list[dict]:
+    """Cue lines for the reviewer, stratified over categories, one revision per line, seeded."""
+    cats = [r[0] for r in con.execute("SELECT DISTINCT category FROM cue_hit ORDER BY 1").fetchall()]
+    per = max(n // max(len(cats), 1), 1)
+    out = []
+    for cat in cats:
+        rows = con.execute(
+            f"""
+            SELECT h.item_id, h.term, h.span_start, h.span_end, t.text, {topics.topic_expr()} AS topic
+            FROM cue_hit h JOIN text_item t USING (item_id) WHERE h.category = ?
+            QUALIFY row_number() OVER (PARTITION BY h.item_id ORDER BY h.span_start) = 1
+            ORDER BY md5(h.item_id || ? || h.category) LIMIT ?
+            """,
+            [cat, SEED, per],
+        ).fetchall()
+        for item_id, term, s, e, text, topic in rows:
+            out.append({"section": "cue", "category": cat, "term": term, "topic": topic,
+                        "a": {**_item_meta(con, item_id), "context": _ctx(text, s, e)}})
+    return out
+
+
+def sample_exchanges(con, n: int) -> list[dict]:
+    allx = traces.exchanges(con, 1000)
+    allx.sort(key=lambda x: hashlib.md5((SEED + x["a"]["item_id"] + x["b"]["item_id"]).encode()).hexdigest())
+    out = []
+    for x in allx[:n]:
+        out.append({"section": "exchange", "topic": x["topic"], "reply_seconds": x["seconds"],
+                    "a": {**_item_meta(con, x["a"]["item_id"]), "context": x["a"]["snippet"]},
+                    "b": {**_item_meta(con, x["b"]["item_id"]), "context": x["b"]["snippet"]}})
+    return out
+
+
+def sample_references(con, n: int) -> list[dict]:
+    plan = {"label_mention": n * 3 // 8, "wikilink": n // 4, "wiki_url": n // 4}
+    plan["page_mention"] = n - sum(plan.values())
+    out = []
+    for rtype, k in plan.items():
+        rows = con.execute(
+            """
+            SELECT r.item_id, r.span_start, r.span_end, r.target_kind, r.target_text, r.target_id, t.text
+            FROM reference r JOIN text_item t USING (item_id) WHERE r.ref_type = ? AND r.resolved
+            ORDER BY md5(r.item_id || r.span_start || ?) LIMIT ?
+            """,
+            [rtype, SEED, k],
+        ).fetchall()
+        for item_id, s, e, kind, target_text, target_id, text in rows:
+            out.append({"section": "reference", "ref_type": rtype, "target_kind": kind, "target_text": target_text,
+                        "a": {**_item_meta(con, item_id), "context": _ctx(text, s, e)}})
+    return out
+
+
+def build_items(con: duckdb.DuckDBPyConnection, with_candidates: bool = False) -> list[dict]:
+    source = con.execute("SELECT source FROM snapshot LIMIT 1").fetchone()[0]
+    if source == "wiki":
+        return _build_wiki_items(con, with_candidates)
     items: list[dict] = []
     items += sample_same_content(con, "url", N_EDGE_URL)
     items += sample_same_content(con, "hex_id", N_EDGE_HEX)
     items += sample_same_content(con, "repo_ref", N_EDGE_REPO)
-    items += sample_candidates(con, N_CAND_CASES)
+    if with_candidates:
+        items += sample_candidates(con, N_CAND_CASES)
     items += sample_extractions(con)
     items += sample_lineage(con)
     qa = [i["artifact_id"] for i in items if i["section"] == "edge" and i["relation"] == "same_content"]
@@ -209,10 +271,30 @@ def build_items(con: duckdb.DuckDBPyConnection) -> list[dict]:
     return items
 
 
+def _build_wiki_items(con, with_candidates: bool) -> list[dict]:
+    z = WIKI_SIZES
+    items: list[dict] = []
+    for atype, n in z["edge"].items():
+        items += sample_same_content(con, atype, n)
+    if with_candidates:
+        items += sample_candidates(con, N_CAND_CASES)
+    items += sample_extractions(con, z["extract"])
+    items += sample_lineage(con, z["lineage"])
+    if con.execute("SELECT count(*) FROM cue_hit").fetchone()[0]:
+        items += sample_cues(con, z["cues"])
+        items += sample_exchanges(con, z["exchanges"])
+        items += sample_references(con, z["references"])
+    qa = [i["artifact_id"] for i in items if i["section"] == "edge" and i["relation"] == "same_content"]
+    items += sample_questions(con, list(dict.fromkeys(qa)), z["qids"], z["question_artifacts"])
+    for n, it in enumerate(items, 1):
+        it["id"] = f"R{n:03d}"
+    return items
+
+
 def _key(it: dict) -> dict:
     k = {"id": it["id"], "section": it["section"]}
     for f in ("relation", "artifact_type", "temporal_status", "system_class", "status", "question_id", "edge_id",
-              "artifact_id", "similarity", "jaccard"):
+              "artifact_id", "similarity", "jaccard", "category", "ref_type", "topic", "reply_seconds"):
         if f in it:
             k[f] = it[f]
     return k
@@ -220,7 +302,7 @@ def _key(it: dict) -> dict:
 
 def _public(it: dict) -> dict:
     """What the reviewer sees: no system class/status (avoid anchoring)."""
-    hide = {"system_class", "status", "similarity", "jaccard", "temporal_status"}
+    hide = {"system_class", "status", "similarity", "jaccard", "temporal_status", "ref_type", "reply_seconds"}
     return {k: v for k, v in it.items() if k not in hide}
 
 
@@ -244,6 +326,9 @@ PROMPTS = {
     "extraction": "Is the extracted string a real artifact of its type? answer: yes | no; second_answer: distinctive | generic | unsure",
     "lineage": "Relative to the predecessor memory: answer: same | edit | new | unsure",
     "question": "Is the system's answer correct and supported by its citations? answer: correct | partly | incorrect | cannot_tell",
+    "cue": "Does the highlighted line really do what the cue category says? answer: yes | partly | no",
+    "exchange": "Is the second author replying to the first? answer: yes | partly | no | cannot_tell; second_answer: answers | timing | other | none",
+    "reference": "Is the highlighted text really a pointer to that label or page? answer: yes | no",
 }
 
 
@@ -267,8 +352,9 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--db", type=Path, default=DEFAULT_DB)
     ap.add_argument("--out", type=Path, default=Path("data/derived/review"))
+    ap.add_argument("--candidates", action="store_true", help="also retrieve possible_reuse candidates (adds edges)")
     args = ap.parse_args()
-    items = build_items(connect(args.db))
+    items = build_items(connect(args.db), args.candidates)
     write(items, args.out)
     by = {}
     for i in items:

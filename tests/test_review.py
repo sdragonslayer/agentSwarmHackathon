@@ -59,3 +59,45 @@ def test_scoring_and_wilson_interval():
     assert tallies["lineage (all classes)"] == {"hits": 1, "n": 1}
     assert tallies["extraction precision (all types)"] == {"hits": 1, "n": 1}
     assert "1/2 = 50%" in md and "95% CI" in md
+
+
+def test_wiki_pack_has_cue_exchange_and_reference_sections_and_stays_blind(tmp_path):
+    from backend.analysis import references, topics
+    from backend.ingest import wiki
+    from tests import synth_exchange
+
+    raw = tmp_path / "raw"
+    synth_exchange.build(raw)
+    db = tmp_path / "x.duckdb"
+    wiki.load(raw, db)
+    con = connect(db)
+    lineage.build(con)
+    artifacts.build(con)
+    edges.build(con)
+    topics.build(con)
+    references.build(con)
+    items = review_pack.build_items(con)
+    sections = {i["section"] for i in items}
+    assert {"cue", "exchange", "reference", "edge", "extraction"} <= sections
+    out = tmp_path / "pack"
+    review_pack.write(items, out)
+    html = (out / "review_pack.html").read_text(encoding="utf-8")
+    pack_json = html.split("const PACK = ")[1].split(";\nconst KEY")[0]
+    for hidden in ('"ref_type"', '"reply_seconds"', '"temporal_status"', '"system_class"'):
+        assert hidden not in pack_json
+    key = json.loads((out / "review_key.json").read_text(encoding="utf-8"))
+    assert any(k.get("category") for k in key["items"] if k["section"] == "cue")
+    assert any(k.get("ref_type") for k in key["items"] if k["section"] == "reference")
+    # the scorer understands the new sections
+    results = {"reviewer": "T", "results": {}}
+    for k in key["items"]:
+        if k["section"] == "cue":
+            results["results"][k["id"]] = {"a1": "yes"}
+        if k["section"] == "exchange":
+            results["results"][k["id"]] = {"a1": "partly", "a2": "timing"}
+        if k["section"] == "reference":
+            results["results"][k["id"]] = {"a1": "no"}
+    tallies, md = review_score.score(key, [results])
+    assert tallies["cue lines: yes (all categories)"]["hits"] == tallies["cue lines: yes (all categories)"]["n"] > 0
+    assert tallies["exchanges: yes or partly"]["hits"] == tallies["exchanges: yes or partly"]["n"] > 0
+    assert tallies["references: real pointer (all types)"]["hits"] == 0 and "95% CI" in md

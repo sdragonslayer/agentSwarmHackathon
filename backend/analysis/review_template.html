@@ -46,7 +46,7 @@ textarea { width:100%; margin-top:8px; }
   <div class="bar">
     <label>Reviewer <input type="text" id="rev" size="14" placeholder="initials"></label>
     <label>Show <select id="flt"><option value="all">all items</option><option value="todo">unanswered</option><option value="edge">links</option>
-      <option value="extraction">extractions</option><option value="lineage">lineage lines</option><option value="question">answers</option></select></label>
+      <option value="extraction">extractions</option><option value="lineage">lineage lines</option><option value="question">answers</option><option value="cue">cue lines</option><option value="exchange">exchanges</option><option value="reference">references</option></select></label>
     <div class="prog"><div class="note" id="pt"></div><div class="meter"><i id="pb" style="width:0"></i></div></div>
     <button id="exp">Export results</button>
   </div>
@@ -67,6 +67,10 @@ const SEC = {
                 q2: ["Is it distinctive enough to link two texts?", [["distinctive", "Distinctive"], ["generic", "Generic / boilerplate"], ["unsure", "Unsure"]]] },
   lineage: { q1: ["Compared with the predecessor memory, this line is…", [["same", "The same line (carried over)"], ["edit", "An edited version of an earlier line"], ["new", "A genuinely new statement"], ["unsure", "Unsure"]]] },
   question: { q1: ["Is the system's answer correct and supported by its citations?", [["correct", "Correct"], ["partly", "Partly"], ["incorrect", "Incorrect"], ["cannot_tell", "Can't tell"]]] },
+  cue: { q1: ["Does the highlighted line really do what the cue category says?", [["yes", "Yes"], ["partly", "Partly"], ["no", "No (just a word)"]]] },
+  exchange: { q1: ["Is the second author replying to the first?", [["yes", "Yes"], ["partly", "Partly"], ["no", "No"], ["cannot_tell", "Can't tell"]]],
+              q2: ["What is being exchanged?", [["answers", "Answers or results"], ["timing", "Timing / clock information"], ["other", "Something else"], ["none", "Nothing substantive"]]] },
+  reference: { q1: ["Is the highlighted text really a pointer to that label or page?", [["yes", "Yes"], ["no", "No"]]] },
 };
 function ctxNode(c) { const p = h("div", { class: "txt" }); p.append(document.createTextNode(c.before), h("span", { class: "mk" }, c.match), document.createTextNode(c.after)); return p; }
 function side(title, it) {
@@ -77,13 +81,22 @@ function side(title, it) {
 function render() {
   const box = $("items"); box.replaceChildren(); const f = $("flt").value;
   PACK.items.forEach((item) => {
-    if (f === "todo" && done2(item)) return; if (["edge", "extraction", "lineage", "question"].includes(f) && item.section !== f) return;
+    if (f === "todo" && done2(item)) return; if (["edge", "extraction", "lineage", "question", "cue", "exchange", "reference"].includes(f) && item.section !== f) return;
     const c = h("div", { class: "card" + (done2(item) ? " done" : "") }); c.dataset.id = item.id;
     const head = h("div"); head.append(h("span", { class: "pill" }, item.id), h("span", { class: "pill" }, item.section)); c.appendChild(head);
     if (item.section === "edge") {
       c.appendChild(h("div", { style: "margin-top:6px;font-weight:600" }, "Shared artifact: " + item.artifact.slice(0, 200)));
       c.appendChild(h("div", { class: "def" }, item.relation === "same_content" ? "Defined as: the exact same string appears in newly written text in both items. It does not show copying, direction, or that the authors are different agents." : "Defined as: the two texts are worded similarly (retrieved by similarity). It is a candidate only, never proof of transmission."));
       const cols = h("div", { class: "cols" }); cols.append(side("Earlier by record", item.a), side("Later by record", item.b)); c.appendChild(cols);
+    } else if (item.section === "cue") {
+      c.appendChild(h("div", { style: "margin-top:6px;font-weight:600" }, "Cue category the system assigned: " + item.category.replace(/_/g, " ") + " (matched word: " + item.term + ")"));
+      c.appendChild(h("div", { class: "def" }, "The highlighted word is a cue from a fixed word list. Topic (the source's own page classification): " + item.topic + ". Judge whether the line itself is doing what the category says, not just containing the word.")); c.appendChild(side("Text", item.a));
+    } else if (item.section === "exchange") {
+      c.appendChild(h("div", { class: "def" }, "Topic: " + item.topic + ". The first author names the second; the second names the first in a later revision. The highlighted names are the pointers."));
+      const cols = h("div", { class: "cols" }); cols.append(side("First", item.a), side("Later", item.b)); c.appendChild(cols);
+    } else if (item.section === "reference") {
+      c.appendChild(h("div", { style: "margin-top:6px;font-weight:600" }, "The system read the highlighted text as a pointer to a " + item.target_kind + ": " + item.target_text));
+      c.appendChild(h("div", { class: "def" }, "Judge whether the author is really naming or linking that " + item.target_kind + " (not just using a similar-looking word).")); c.appendChild(side("Text", item.a));
     } else if (item.section === "extraction") {
       c.appendChild(h("div", { style: "margin-top:6px;font-weight:600" }, "Type the system assigned: " + item.artifact_type.replace("_", " ")));
       c.appendChild(h("div", { class: "def" }, "The highlighted string was extracted from this text automatically.")); c.appendChild(side("Text", item.a));
