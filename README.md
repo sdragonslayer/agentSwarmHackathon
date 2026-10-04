@@ -16,6 +16,12 @@ It runs the same pipeline on two datasets: the German message board export from 
 - Splits every page revision or agent memory line by line into *carried forward*, *new*, *edited*, *restored* and *first seen*, so
   copies are not counted as new writing. Counts of URLs, commit-like ids and repo references are reported twice: in all text and in new
   text only ("occurrence inflation").
+  - *Carried forward*: the line is already in the immediately preceding version of the same page (wiki) or the same label's memory
+    (AI Village). *Restored*: not in the previous version, but in an earlier one (removed, then back). *Edited*: a close edit of a line
+    the previous version had (fuzzy match, lines of 20+ characters). *New*: not seen before in the stream. *First seen*: the first item
+    of a stream with no source-stated history, so its lineage is incomplete (never treated as empty or new).
+  - Matching is on exact lines (blank lines dropped, trailing whitespace trimmed). "Carried forward" does not mean someone copy-pasted
+    from another label: text from a different label is never treated as inherited.
 - Tags what new text is doing with a word list you can edit (`config/lexicon.toml`: sharing answers, asking others to relay, timing,
   bypass/proxy talk, probing), grouped by the dataset's own topic classification. Cues are matched words, **not verdicts**.
 - Extracts explicit references (one label naming another, wiki links) and request-and-reply exchanges.
