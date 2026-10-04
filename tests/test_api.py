@@ -47,3 +47,51 @@ def test_reviews_are_append_only(tmp_path):
     assert a["review_id"] != b["review_id"]
     assert c.post("/reviews", json={"edge_id": "missing", "decision": "accept"}).status_code == 404
     assert c.post("/reviews", json={"edge_id": edge_id, "decision": "bogus"}).status_code == 422
+
+
+def test_frontend_and_case_endpoints(tmp_path):
+    c, aid = _client(tmp_path)
+    page = c.get("/")
+    assert page.status_code == 200 and "SwarmScope" in page.text and "innerHTML" not in page.text
+    assert "default-src 'self'" in page.headers["content-security-policy"]
+    st = c.get("/stats").json()
+    assert st["inflation"]["line_level_by_stream"] and st["scope"]["text_item"] > 0
+    cases = c.get("/cases").json()["cases"]
+    assert cases and cases[0]["counts"]["novel_labels"] >= 2
+    detail = c.get(f"/cases/{aid}").json()
+    assert detail["edges"][0]["edge_id"].startswith("edge:") and len(detail["answers"]) == 10
+    assert c.post(f"/cases/{aid}/candidates").status_code in (404, 405)  # similarity search is not exposed
+    item = c.get("/events/av:mem:33333333-0000-0000-0000-000000000002").json()
+    classes = {line["cls"] for line in item["lines"]}
+    assert "inherited" in classes and "new" in classes
+    edge_id = detail["edges"][0]["edge_id"]
+    c.post("/reviews", json={"edge_id": edge_id, "decision": "accept", "rationale": "exact string"})
+    revs = c.get(f"/cases/{aid}/reviews").json()["reviews"]
+    assert [r["decision"] for r in revs] == ["accept"]
+    assert c.get("/cases/nope").status_code == 404
+
+
+def test_case_detail_answers_carry_citations(tmp_path):
+    """Regression: the frontend renders answer.citations; the case payload must include them."""
+    c, aid = _client(tmp_path)
+    answers = c.get(f"/cases/{aid}").json()["answers"]
+    assert all("citations" in a and "limitations" in a for a in answers)
+    assert any(a["citations"] for a in answers)
+
+
+def test_text_item_lists_its_artifacts_for_opening_a_case(tmp_path):
+    c, aid = _client(tmp_path)
+    item = c.get("/events/av:chat:11111111-0000-0000-0000-000000000001").json()
+    assert aid in [a["artifact_id"] for a in item["artifacts"]]
+    top = item["artifacts"][0]
+    assert top["novel_labels"] >= 2 and top["raw"] == synth.URL
+    assert c.get(f"/cases/{top['artifact_id']}").json()["appearances"]
+
+
+def test_search_timeline_plots_phrase_hits_without_links(tmp_path):
+    c, _ = _client(tmp_path)
+    r = c.get("/search/timeline", params={"q": "workaround"}).json()
+    assert r["total"] >= 1 and r["appearances"] and "no edges are drawn" in r["note"]
+    first = r["appearances"][0]
+    assert first["snippet"]["match"].lower() == "workaround" and first["novelty"] == "standalone"
+    assert c.get("/search/timeline", params={"q": "zzzz-no-such-phrase"}).json()["total"] == 0

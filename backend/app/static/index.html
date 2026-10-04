@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SwarmScope</title>
+<style>
+:root { color-scheme: light; }
+.viz-root {
+  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,0.10);
+  --s1: #2a78d6; --s2: #eb6834; --good: #006300; --bad: #d03b3b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) .viz-root {
+    color-scheme: dark; --page: #0d0d0d; --surface: #1a1a19; --ink: #fff; --ink2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --s1: #3987e5; --s2: #d95926;
+    --good: #0ca30c; --bad: #e66767;
+  }
+}
+:root[data-theme="dark"] .viz-root {
+  color-scheme: dark; --page: #0d0d0d; --surface: #1a1a19; --ink: #fff; --ink2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --s1: #3987e5; --s2: #d95926;
+  --good: #0ca30c; --bad: #e66767;
+}
+* { box-sizing: border-box; }
+body { margin: 0; }
+.viz-root { background: var(--page); color: var(--ink); font: 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  height: 100vh; display: flex; flex-direction: column; }
+header { display: flex; align-items: baseline; gap: 16px; padding: 10px 16px; border-bottom: 1px solid var(--grid);
+  background: var(--surface); flex-wrap: wrap; }
+header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+header .tag { color: var(--ink2); }
+header .cov { color: var(--muted); font-size: 12px; margin-left: auto; }
+.panes { flex: 1; display: grid; grid-template-columns: 300px minmax(0, 1fr) 380px; min-height: 0; }
+.pane { overflow: auto; padding: 14px; min-width: 0; }
+.pane.left { border-right: 1px solid var(--grid); background: var(--surface); }
+.pane.right { border-left: 1px solid var(--grid); background: var(--surface); }
+h2 { font-size: 13px; font-weight: 600; margin: 16px 0 6px; }
+h2:first-child { margin-top: 0; }
+input[type=search], select, textarea { width: 100%; background: var(--page); color: var(--ink); border: 1px solid var(--axis);
+  border-radius: 8px; padding: 6px 10px; font: inherit; }
+button { background: var(--page); color: var(--ink); border: 1px solid var(--axis); border-radius: 8px; padding: 5px 10px;
+  font: inherit; cursor: pointer; }
+button:hover { border-color: var(--ink2); }
+button[aria-pressed=true], button.on { border-color: var(--s1); box-shadow: inset 0 0 0 1px var(--s1); }
+button.accept { border-color: var(--good); } button.reject { border-color: var(--bad); }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
+.list { list-style: none; margin: 0; padding: 0; }
+.list li { padding: 7px 8px; border-radius: 8px; cursor: pointer; border: 1px solid transparent; }
+.list li:hover, .list li:focus-visible { border-color: var(--axis); outline: none; }
+.list li.sel { border-color: var(--s1); }
+.list .t { word-break: break-all; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; }
+.list .m { color: var(--muted); font-size: 11px; }
+.card { background: var(--surface); border: 1px solid var(--ring); border-radius: 12px; padding: 14px; margin-bottom: 12px; }
+.note { color: var(--muted); font-size: 12px; }
+.pill { display: inline-block; border: 1px solid var(--axis); border-radius: 999px; padding: 0 8px; font-size: 11px; color: var(--ink2); }
+.hero { font-size: 44px; font-weight: 600; line-height: 1.1; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; color: var(--ink2); font-size: 12px; margin: 4px 0 8px; }
+.legend span { display: inline-flex; gap: 6px; align-items: center; }
+svg text { fill: var(--ink2); font: 12px system-ui, -apple-system, "Segoe UI", sans-serif; }
+svg .val { fill: var(--ink); font-weight: 600; } svg .muted { fill: var(--muted); }
+code, .mono { font: 12px ui-monospace, "Cascadia Mono", Consolas, monospace; word-break: break-all; }
+table { border-collapse: collapse; width: 100%; font-size: 12px; }
+th, td { text-align: left; padding: 5px 8px 5px 0; border-bottom: 1px solid var(--grid); vertical-align: top; }
+th { color: var(--ink2); }
+details { margin-top: 8px; } summary { cursor: pointer; color: var(--ink2); font-size: 12px; }
+.mk { background: color-mix(in srgb, var(--s1) 28%, transparent); border-radius: 3px; padding: 0 1px; }
+.lines { max-height: 340px; overflow: auto; border: 1px solid var(--grid); border-radius: 8px; padding: 4px 0; background: var(--page); }
+.ln { display: flex; gap: 8px; padding: 0 8px; font: 12px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace; }
+.ln .g { flex: none; width: 64px; color: var(--muted); }
+.ln .x { white-space: pre-wrap; word-break: break-word; }
+.ln.inherited .x { color: var(--muted); }
+.ln.new, .ln.first_observed, .ln.modified { background: color-mix(in srgb, var(--s1) 14%, transparent); }
+.ln.restored { box-shadow: inset 0 0 0 1px var(--muted); }
+.q { padding: 8px 0; border-bottom: 1px solid var(--grid); }
+.q .st { border: 1px solid var(--axis); border-radius: 999px; padding: 0 8px; font-size: 11px; margin-right: 6px; white-space: nowrap; }
+.q .qq { font-weight: 600; }
+#tip { position: fixed; pointer-events: none; z-index: 10; background: var(--surface); color: var(--ink);
+  border: 1px solid var(--axis); border-radius: 8px; padding: 8px 10px; max-width: 400px; font-size: 12px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.18); display: none; }
+#tip .t1 { font-weight: 600; } #tip .t2 { color: var(--ink2); } #tip .sn { margin-top: 4px; white-space: pre-wrap; word-break: break-word; }
+.dot:focus { outline: none; } .dot:focus-visible circle:nth-child(2) { stroke: var(--ink); stroke-width: 2; }
+.edge-hit { cursor: pointer; }
+.loading { opacity: .5; }
+@media (max-width: 1100px) { .panes { grid-template-columns: 1fr; } .pane { overflow: visible; } .viz-root { height: auto; } }
+</style>
+</head>
+<body>
+<div class="viz-root">
+<header>
+  <h1>SwarmScope</h1><span class="tag">Trace the handoff. Inspect the evidence.</span>
+  <span class="cov" id="cov">loading…</span>
+</header>
+<div class="panes">
+  <section class="pane left" aria-label="Search and cases">
+    <h2><label for="q">Search</label></h2>
+    <form id="sf" class="row"><input id="q" type="search" placeholder="URL, commit id, phrase…" minlength="2" autocomplete="off">
+      <button type="submit">Search</button></form>
+    <label class="note"><input type="checkbox" id="incl-mem"> include agent memories (slower, mostly repeated text)</label>
+    <div class="note">Matches artifact strings and chat/goal text anywhere in the string. Click an artifact for its case; click a text hit to open its most-shared artifact.</div>
+    <div id="results"></div>
+    <h2>Cases</h2>
+    <div class="note">Artifacts shared across author labels, plus one carryover example. Not a representative sample.</div>
+    <ul class="list" id="cases"></ul>
+  </section>
+
+  <main class="pane" aria-label="Timeline and evidence">
+    <div id="overview"></div>
+    <div id="case" hidden>
+      <div class="card">
+        <div id="c-title" style="font-weight:600"></div>
+        <div class="note" id="c-counts"></div>
+        <div class="row">
+          <button id="v-time" aria-pressed="true">Timeline</button>
+          <button id="v-graph" aria-pressed="false">Graph</button>
+          <button id="b-cons" aria-pressed="false" title="Show only links whose order is established by the source's own sequence">Conservative mode</button>
+          <button id="b-md">Export Markdown</button><button id="b-json">Export JSON</button>
+          <button id="b-home">Back to overview</button>
+        </div>
+        <div class="legend" id="legend"></div>
+        <div id="chart"></div>
+        <div class="note" id="c-note"></div>
+        <details><summary>Table view</summary><div id="c-table"></div></details>
+      </div>
+      <div class="card" id="q-card"><div style="font-weight:600">Investigation questions</div><div id="qs"></div></div>
+    </div>
+  </main>
+
+  <aside class="pane right" aria-label="Evidence inspector">
+    <h2>Inspector</h2>
+    <div id="insp" class="note">Click a dot to inspect a text item, or a link to inspect its evidence and record a review.</div>
+  </aside>
+</div>
+</div>
+<div id="tip" role="tooltip"></div>
+<script>
+"use strict";
+const NS = "http://www.w3.org/2000/svg";
+const $ = (id) => document.getElementById(id);
+const fmt = (n) => Number(n).toLocaleString("en-US");
+const pct = (x) => (x * 100).toFixed(1) + "%";
+const clip = (v, n) => { v = String(v); return v.length > n ? v.slice(0, n - 1) + "…" : v; };
+function h(tag, props, text) { const e = document.createElement(tag); if (props) for (const [k, v] of Object.entries(props)) e.setAttribute(k, v); if (text !== undefined) e.textContent = text; return e; }
+function s(tag, props, text) { const e = document.createElementNS(NS, tag); if (props) for (const [k, v] of Object.entries(props)) e.setAttribute(k, v); if (text !== undefined) e.textContent = text; return e; }
+async function api(path, opts) { const r = await fetch(path, opts); if (!r.ok) throw new Error(path + " → " + r.status); return r.json(); }
+const state = { cases: [], cur: null, view: "time", conservative: false, selItem: null, selEdge: null, reviews: [] };
+
+// ---- tooltip ----
+const tip = $("tip");
+function showTip(evt, rows, snippet) {
+  tip.replaceChildren();
+  rows.forEach(([c, t]) => tip.appendChild(h("div", { class: c }, t)));
+  if (snippet) { const p = h("div", { class: "sn" }); p.append(document.createTextNode(snippet.before), h("span", { class: "mk" }, snippet.match), document.createTextNode(snippet.after)); tip.appendChild(p); }
+  tip.style.display = "block";
+  const r = evt.currentTarget.getBoundingClientRect(), x = evt.clientX || r.left + r.width / 2, y = evt.clientY || r.top;
+  tip.style.left = Math.max(8, Math.min(x + 14, innerWidth - tip.offsetWidth - 8)) + "px";
+  tip.style.top = Math.max(8, Math.min(y + 14, innerHeight - tip.offsetHeight - 8)) + "px";
+}
+const hideTip = () => { tip.style.display = "none"; };
+function hover(node, rows, snippet) {
+  node.addEventListener("pointermove", (e) => showTip(e, rows, snippet)); node.addEventListener("pointerleave", hideTip);
+  node.addEventListener("focus", (e) => showTip(e, rows, snippet)); node.addEventListener("blur", hideTip);
+}
+function highlighted(parent, text, needle) {
+  if (!needle) { parent.appendChild(document.createTextNode(text)); return; }
+  let i = 0, j;
+  while ((j = text.indexOf(needle, i)) >= 0) { parent.append(document.createTextNode(text.slice(i, j)), h("span", { class: "mk" }, needle)); i = j + needle.length; }
+  parent.appendChild(document.createTextNode(text.slice(i)));
+}
+function table(cols, rows) {
+  const t = h("table"), tr = h("tr");
+  cols.forEach((c) => tr.appendChild(h("th", null, c.label))); t.appendChild(h("thead")).appendChild(tr);
+  const tb = h("tbody"); rows.forEach((r) => { const row = h("tr"); cols.forEach((c) => { const td = h("td"); const v = c.get(r); if (c.code) td.appendChild(h("code", null, v)); else td.textContent = v; row.appendChild(td); }); tb.appendChild(row); });
+  t.appendChild(tb); return t;
+}
+
+// ---- overview ----
+const STREAM = { mem: "Agent memories", sgoal: "Session goals" };
+async function renderOverview() {
+  const st = await api("/stats"), inf = st.inflation;
+  $("cov").textContent = fmt(st.scope.event) + " events · " + fmt(st.scope.text_item) + " text items · " + fmt(st.scope.actor_label) + " author labels (not verified agents)";
+  const tot = inf.line_level_by_stream.reduce((a, r) => ({ l: a.l + r.lines, i: a.i + r.inherited_lines }), { l: 0, i: 0 });
+  const ov = $("overview"); ov.replaceChildren();
+  const hero = h("div", { class: "card" });
+  hero.append(h("div", { class: "hero" }, tot.l ? pct(tot.i / tot.l) : "n/a"),
+    h("div", null, "of " + fmt(tot.l) + " lines in agent memories and session goals are carried forward unchanged from the same label's previous version, so they are not new utterances."));
+  ov.appendChild(hero);
+  const c1 = h("div", { class: "card" }); c1.append(h("div", { style: "font-weight:600" }, "Occurrence inflation by artifact type"),
+    h("div", { class: "note" }, "Occurrences in all text vs. in non-inherited text only. A count of text occurrences, not an estimate of false transmission."));
+  const lg = h("div", { class: "legend" }); [["var(--s2)", "Full text (carryover included)"], ["var(--s1)", "New text only"]].forEach(([c, t]) => { const sp = h("span"); const sw = h("i", { style: "display:inline-block;width:14px;height:8px;border-radius:2px;background:" + c }); sp.append(sw, document.createTextNode(t)); lg.appendChild(sp); }); c1.appendChild(lg);
+  const types = inf.artifact_level_by_type, max = Math.max(1, ...types.map((t) => t.full_occurrences));
+  const NAMES = { url: "URLs", hex_id: "Hex ids", repo_ref: "Repo refs" };
+  const W = 640, L = 90, R = 170, B = 16, top = 4, H = top + types.length * 50;
+  const svg = s("svg", { viewBox: "0 0 " + W + " " + H, width: "100%", role: "img", "aria-label": "Full vs new-text occurrences by artifact type" });
+  types.forEach((t, i) => { const y = top + i * 50; svg.appendChild(s("text", { x: L - 8, y: y + 22, "text-anchor": "end" }, NAMES[t.artifact_type] || t.artifact_type));
+    [["full_occurrences", "var(--s2)", 0], ["novel_occurrences", "var(--s1)", 1]].forEach(([k, c, j]) => { const w = Math.max(t[k] / max * (W - L - R), 2); const r = s("rect", { x: L, y: y + j * (B + 2), width: w, height: B, rx: 4, fill: c, tabindex: 0 }); hover(r, [["t1", fmt(t[k]) + (j ? " in new text" : " in full text")], ["t2", fmt(t.artifacts) + " distinct " + (NAMES[t.artifact_type] || t.artifact_type)]]); svg.append(r, s("text", { x: L + w + 6, y: y + j * (B + 2) + 12, class: "val" }, fmt(t[k]))); });
+    svg.appendChild(s("text", { x: W - 4, y: y + 22, "text-anchor": "end", class: "muted" }, t.occurrence_inflation ? t.occurrence_inflation + "× inflation" : "")); });
+  c1.appendChild(svg);
+  const d = h("details"); d.appendChild(h("summary", null, "Table view"));
+  d.appendChild(table([{ label: "Type", get: (t) => NAMES[t.artifact_type] || t.artifact_type }, { label: "Distinct", get: (t) => fmt(t.artifacts) }, { label: "Full", get: (t) => fmt(t.full_occurrences) }, { label: "New", get: (t) => fmt(t.novel_occurrences) }, { label: "In 2+ labels", get: (t) => fmt(t.artifacts_in_2plus_labels.novel) }], types)); c1.appendChild(d); ov.appendChild(c1);
+  const c2 = h("div", { class: "card" }); c2.appendChild(h("div", { style: "font-weight:600" }, "Carried-forward share by stream"));
+  inf.line_level_by_stream.forEach((r) => { const row = h("div", { class: "row" }); row.append(h("span", { style: "width:130px" }, STREAM[r.stream] || r.stream), h("span", { class: "val" }, r.inherited_share === null ? "n/a" : pct(r.inherited_share)), h("span", { class: "note" }, fmt(r.inherited_lines) + " of " + fmt(r.lines) + " lines in " + fmt(r.items) + " items")); c2.appendChild(row); });
+  ov.appendChild(c2);
+  const c3 = h("div", { class: "card" }); c3.append(h("div", { style: "font-weight:600" }, "Most inflated artifacts"), h("div", { class: "note" }, "Click one to inspect it."));
+  const ul = h("ul", { class: "list" });
+  inf.most_inflated_artifacts.forEach((a) => { const li = h("li", { tabindex: 0 }); li.append(h("div", { class: "t" }, clip(a.raw, 90)), h("div", { class: "m" }, a.type + " · " + fmt(a.full_occurrences) + " full vs " + fmt(a.novel_occurrences) + " new · " + fmt(a.full_items) + " items / " + fmt(a.novel_items) + " new-text items")); li.addEventListener("click", () => loadCase(a.artifact_id)); li.addEventListener("keydown", (e) => { if (e.key === "Enter") loadCase(a.artifact_id); }); ul.appendChild(li); });
+  c3.appendChild(ul); ov.appendChild(c3);
+}
+
+// ---- left pane ----
+async function renderCases() {
+  const { cases } = await api("/cases"); state.cases = cases; const ul = $("cases"); ul.replaceChildren();
+  cases.forEach((c) => { const li = h("li", { tabindex: 0, "data-id": c.artifact_id });
+    li.append(h("div", { class: "t" }, clip(c.raw, 70)), h("div", { class: "m" }, (c.case_kind === "carryover" ? "carryover · " : "") + c.type + " · " + fmt(c.counts.novel_labels) + " labels · " + fmt(c.counts.full_occurrences) + " full / " + fmt(c.counts.novel_occurrences) + " new"));
+    li.addEventListener("click", () => loadCase(c.artifact_id)); li.addEventListener("keydown", (e) => { if (e.key === "Enter") loadCase(c.artifact_id); }); ul.appendChild(li); });
+}
+$("sf").addEventListener("submit", async (e) => {
+  e.preventDefault(); const q = $("q").value.trim(); if (q.length < 2) return; const box = $("results"); box.classList.add("loading");
+  try {
+    const r = await api("/search?q=" + encodeURIComponent(q) + "&limit=15" + ($("incl-mem").checked ? "&kind=memory" : "")); box.replaceChildren(h("h2", null, "Artifacts"));
+    const ul = h("ul", { class: "list" }); r.artifacts.forEach((a) => { const li = h("li", { tabindex: 0 }); li.append(h("div", { class: "t" }, clip(a.raw, 80)), h("div", { class: "m" }, a.type + " · " + fmt(a.novel_items) + " new-text items · " + fmt(a.novel_labels) + " labels")); li.addEventListener("click", () => loadCase(a.artifact_id)); li.addEventListener("keydown", (e) => { if (e.key === "Enter") loadCase(a.artifact_id); }); ul.appendChild(li); });
+    box.appendChild(r.artifacts.length ? ul : h("div", { class: "note" }, "No matching artifacts."));
+    box.appendChild(h("h2", null, "Text items")); const plot = h("button", null, "Plot all hits on a timeline"); plot.addEventListener("click", () => loadPhrase(q)); box.appendChild(plot); const ul2 = h("ul", { class: "list" });
+    r.items.forEach((it) => { const li = h("li", { tabindex: 0 }); const sn = h("div", { class: "t" }); sn.textContent = clip(it.snippet.replace(/\s+/g, " "), 110); li.append(sn, h("div", { class: "m" }, it.kind.replace(/_/g, " ") + " · " + (it.time || "no time"))); li.addEventListener("click", () => openFromText(it.item_id)); li.addEventListener("keydown", (e) => { if (e.key === "Enter") openFromText(it.item_id); }); ul2.appendChild(li); });
+    box.appendChild(r.items.length ? ul2 : h("div", { class: "note" }, "No matching chat/goal text."));
+    box.appendChild(h("div", { class: "note" }, r.order_note));
+  } catch (err) { box.replaceChildren(h("div", { class: "note" }, String(err))); }
+  box.classList.remove("loading");
+});
+
+// ---- case ----
+async function loadCase(id) {
+  hideTip(); const cs = await api("/cases/" + encodeURIComponent(id));
+  state.cur = cs; state.selItem = null; state.selEdge = null;
+  try { state.reviews = (await api("/cases/" + encodeURIComponent(id) + "/reviews")).reviews; } catch (e) { state.reviews = []; }
+  $("overview").hidden = true; $("case").hidden = false; $("q-card").hidden = false; ["b-md", "b-json", "b-cons"].forEach((x) => { $(x).hidden = false; });
+  [...$("cases").children].forEach((li) => li.classList.toggle("sel", li.dataset.id === id));
+  $("c-title").replaceChildren(document.createTextNode(cs.type + ": "), h("code", null, clip(cs.raw, 160)));
+  const k = cs.counts; $("c-counts").textContent = fmt(k.full_occurrences) + " occurrences in full text vs " + fmt(k.novel_occurrences) + " in new text; " + fmt(k.novel_items) + " new-text items by " + fmt(k.novel_labels) + " author label(s)." + (cs.appearances.length >= 80 ? " Showing the first 80 appearances." : "");
+  renderChart(); renderQuestions();
+  $("insp").replaceChildren(h("div", { class: "note" }, "Click a dot to inspect a text item, or a link to inspect its evidence and record a review."));
+}
+function visibleEdges() {
+  const all = state.cur.edges; if (!state.conservative) return { shown: all, hidden: 0 };
+  const shown = all.filter((e) => e.relation === "same_content" && e.temporal === "sequence_ordered"); return { shown, hidden: all.length - shown.length };
+}
+const EDGE_NOTE = "Links are undirected: even an exact shared string does not prove one label influenced another.";
+function legend(el, items) { el.replaceChildren(); items.forEach(([svgNode, t]) => { const sp = h("span"); sp.append(svgNode, document.createTextNode(t)); el.appendChild(sp); }); }
+function renderChart() {
+  const c = state.cur, { shown, hidden } = visibleEdges(); const ch = $("chart");
+  const mk = (kind) => { const sv = s("svg", { width: 26, height: 12 }); if (kind === "new") sv.appendChild(s("circle", { cx: 7, cy: 6, r: 5, fill: "var(--s1)" })); else if (kind === "rest") sv.appendChild(s("circle", { cx: 7, cy: 6, r: 4, fill: "none", stroke: "var(--muted)", "stroke-width": 2 })); else sv.appendChild(s("line", { x1: 0, x2: 26, y1: 6, y2: 6, stroke: "var(--ink2)", "stroke-width": 2, "stroke-dasharray": kind === "dash" ? "5 4" : "" })); return sv; };
+  legend($("legend"), c.phrase ? [[mk("new"), "Text containing the phrase"]] : [[mk("new"), "New text"], [mk("rest"), "Restored copy"], [mk("solid"), "Same exact string"]]);
+  if (c.phrase) { $("c-note").textContent = "Dots are placed by recorded database time, whose clock uncertainty is not given. " + c.phrase.note; } else
+  $("c-note").textContent = EDGE_NOTE + (state.conservative ? " Conservative mode: " + hidden + " link(s) hidden because their order is not established by the source's own sequence." : "") + " Positions use recorded database time, whose clock uncertainty is not given.";
+  const apps = c.appearances;
+  if (state.view === "graph") renderGraph(ch, apps, shown); else renderTimeline(ch, apps, shown);
+  $("c-table").replaceChildren(table([{ label: "Time", get: (a) => a.time || "unknown" }, { label: "Author label", get: (a) => a.label }, { label: "Kind", get: (a) => a.kind.replace(/_/g, " ") }, { label: "Text", get: (a) => a.novelty.replace(/_/g, " ") }, { label: "Context", code: 1, get: (a) => a.snippet.before.slice(-40) + a.snippet.match + a.snippet.after.slice(0, 40) }], apps));
+}
+function appTime(a) { return a.time ? Date.parse(a.time.replace(" ", "T") + "Z") : null; }
+function dotNode(a, px, py) {
+  const g = s("g", { class: "dot", tabindex: 0, role: "button", "aria-label": a.label + ", " + a.novelty + ", " + (a.time || "no time") }); const rest = a.novelty === "restored";
+  g.appendChild(s("circle", { cx: px, cy: py, r: 12, fill: "transparent", style: "cursor:pointer" }));
+  g.appendChild(s("circle", { cx: px, cy: py, r: rest ? 4 : 5, fill: rest ? "var(--surface)" : "var(--s1)", stroke: rest ? "var(--muted)" : "var(--surface)", "stroke-width": 2 }));
+  hover(g, [["t1", a.label], ["t2", a.kind.replace(/_/g, " ") + " · " + a.novelty.replace(/_/g, " ") + " · " + (a.time || "no time") + (a.event_index ? " · event " + a.event_index : "")]], a.snippet);
+  g.addEventListener("click", () => inspectItem(a.item_id)); g.addEventListener("keydown", (e) => { if (e.key === "Enter") inspectItem(a.item_id); });
+  return g;
+}
+function edgeLine(e, p, q) {
+  const grp = s("g", { class: "edge-hit", tabindex: 0, role: "button", "aria-label": e.relation + " link" });
+  grp.appendChild(s("line", { x1: p.x, y1: p.y, x2: q.x, y2: q.y, stroke: "transparent", "stroke-width": 12 }));
+  const ln = s("line", { x1: p.x, y1: p.y, x2: q.x, y2: q.y, stroke: "var(--ink2)", "stroke-width": state.selEdge === e.src + e.dst ? 3 : 1.5, "stroke-linecap": "round", opacity: 0.8 });
+  if (e.relation === "possible_reuse") ln.setAttribute("stroke-dasharray", "5 4"); grp.appendChild(ln);
+  hover(grp, [["t1", e.relation.replace(/_/g, " ")], ["t2", e.tier.replace(/_/g, " ") + " · order: " + e.temporal.replace(/_/g, " ")]]);
+  grp.addEventListener("click", () => inspectEdge(e)); grp.addEventListener("keydown", (ev) => { if (ev.key === "Enter") inspectEdge(e); });
+  return grp;
+}
+function renderTimeline(ch, apps, edges) {
+  const dated = apps.filter((a) => a.time), order = []; apps.forEach((a) => { if (!order.includes(a.label)) order.push(a.label); });
+  const MAXL = 10, lanes = order.slice(0, MAXL); if (order.length > MAXL) lanes.push("other labels (" + (order.length - MAXL) + ")");
+  const laneOf = (l) => { const i = lanes.indexOf(l); return i < 0 ? lanes.length - 1 : i; };
+  const W = 860, L = 190, R = 20, LH = 36, top = 10, H = top + lanes.length * LH + 36; const times = dated.map(appTime);
+  if (!dated.length) { ch.replaceChildren(h("div", { class: "note" }, "No appearance has a recorded time; see the table view.")); return; }
+  const t0 = Math.min(...times), t1 = Math.max(...times, t0 + 1), x = (t) => L + (t - t0) / (t1 - t0 || 1) * (W - L - R);
+  const svg = s("svg", { viewBox: "0 0 " + W + " " + H, width: "100%", role: "img", "aria-label": "Appearances by author label over time" });
+  lanes.forEach((l, i) => { const y = top + i * LH + LH / 2; svg.append(s("line", { x1: L, x2: W - R, y1: y, y2: y, stroke: "var(--grid)" }), s("text", { x: L - 10, y: y + 4, "text-anchor": "end" }, clip(l, 28))); });
+  for (let i = 0; i <= 4; i++) { const t = t0 + (t1 - t0) * i / 4, d = new Date(t).toISOString(); svg.appendChild(s("text", { x: x(t), y: H - 10, "text-anchor": i === 0 ? "start" : i === 4 ? "end" : "middle", class: "muted" }, t1 - t0 > 2 * 864e5 ? d.slice(0, 10) : d.slice(0, 16).replace("T", " "))); }
+  const pos = {}; dated.forEach((a, i) => { if (!(a.item_id in pos)) pos[a.item_id] = { x: x(times[i]), y: top + laneOf(a.label) * LH + LH / 2 }; });
+  edges.forEach((e) => { if (pos[e.src] && pos[e.dst]) svg.appendChild(edgeLine(e, pos[e.src], pos[e.dst])); });
+  dated.forEach((a, i) => svg.appendChild(dotNode(a, x(times[i]), top + laneOf(a.label) * LH + LH / 2)));
+  ch.replaceChildren(svg); const u = apps.length - dated.length; if (u) ch.appendChild(h("div", { class: "note" }, u + " appearance(s) have no recorded time and are not drawn."));
+}
+function renderGraph(ch, apps, edges) {
+  const W = 640, H = 640, cx = W / 2, cy = H / 2, R = 250; const seen = []; apps.forEach((a) => { if (!seen.find((b) => b.item_id === a.item_id)) seen.push(a); });
+  const shownNodes = seen.slice(0, 100), n = shownNodes.length || 1, pos = {};
+  shownNodes.forEach((a, i) => { const ang = i / n * 2 * Math.PI - Math.PI / 2; pos[a.item_id] = { x: cx + R * Math.cos(ang), y: cy + R * Math.sin(ang) }; });
+  const svg = s("svg", { viewBox: "0 0 " + W + " " + H, width: "100%", role: "img", "aria-label": "Link graph of appearances, ordered clockwise by recorded time" });
+  edges.forEach((e) => { if (pos[e.src] && pos[e.dst]) svg.appendChild(edgeLine(e, pos[e.src], pos[e.dst])); });
+  shownNodes.forEach((a) => svg.appendChild(dotNode(a, pos[a.item_id].x, pos[a.item_id].y)));
+  ch.replaceChildren(svg); ch.appendChild(h("div", { class: "note" }, "Nodes run clockwise by recorded time (not established action order); at most 100 nodes shown" + (seen.length > 100 ? " (" + (seen.length - 100) + " omitted)." : ".")));
+}
+const STATUS = { supported: "✓ supported", partial: "~ partial", unknown: "? unknown", conflicting: "≠ conflicting" };
+function renderQuestions() {
+  const el = $("qs"); el.replaceChildren();
+  state.cur.answers.forEach((a) => { const q = h("div", { class: "q" }); const t = h("div"); t.append(h("span", { class: "st" }, STATUS[a.status] || a.status), h("span", { class: "qq" }, a.question)); q.append(t, h("div", null, a.claim));
+    if ((a.citations || []).length) { const d = h("details"); d.appendChild(h("summary", null, "Citations (" + a.citations.length + ")")); a.citations.forEach((c) => { const row = h("div", { class: "mono", style: "padding:4px 0;cursor:pointer" }); row.textContent = c.item_id + " [" + c.span_start + ":" + c.span_end + "]"; row.addEventListener("click", () => inspectItem(c.item_id)); d.appendChild(row); }); q.appendChild(d); }
+    if ((a.limitations || []).length) { const d = h("details"); d.appendChild(h("summary", null, "Limitations (" + a.limitations.length + ")")); const ul = h("ul"); a.limitations.forEach((l) => ul.appendChild(h("li", null, l))); d.appendChild(ul); q.appendChild(d); }
+    el.appendChild(q); });
+}
+
+async function loadPhrase(q) {
+  hideTip(); const kindArg = $("incl-mem").checked ? "&kind=memory" : ""; const r = await api("/search/timeline?q=" + encodeURIComponent(q) + kindArg);
+  state.cur = { artifact_id: null, type: "text search", raw: q, appearances: r.appearances, edges: [], answers: [], counts: {}, phrase: r };
+  state.selItem = null; state.selEdge = null; state.reviews = []; $("overview").hidden = true; $("case").hidden = false;
+  [...$("cases").children].forEach((li) => li.classList.remove("sel"));
+  $("c-title").replaceChildren(document.createTextNode("Text search: "), h("code", null, clip(q, 120)));
+  const labels = new Set(r.appearances.map((a) => a.label)).size;
+  $("c-counts").textContent = fmt(r.total) + " matching text item(s)" + (r.total > r.shown ? ", showing the first " + r.shown + " by recorded time" : "") + " by " + labels + " author label(s). " + r.note;
+  $("q-card").hidden = true; ["b-md", "b-json", "b-cons"].forEach((id) => { $(id).hidden = true; });
+  renderChart(); $("insp").replaceChildren(h("div", { class: "note" }, "Click a dot to read that item."));
+}
+// ---- inspector ----
+async function openFromText(itemId) {
+  // A text hit has no graph of its own: open the case of the most-shared artifact it contains.
+  const it = await api("/events/" + itemId); const best = (it.artifacts || []).find((a) => a.novel_labels >= 2) || (it.artifacts || [])[0];
+  if (!best) { const q = $("q").value.trim(); if (q.length >= 2) await loadPhrase(q); await inspectItem(itemId); $("insp").appendChild(h("div", { class: "note", style: "margin-top:8px" }, "This text contains no extracted artifact (URL, commit-like id, repo ref), so the chart plots every hit for your search phrase instead. No links are drawn.")); return; }
+  await loadCase(best.artifact_id); await inspectItem(itemId);
+}
+async function inspectItem(id) {
+  state.selItem = id; const box = $("insp"); box.classList.add("loading");
+  try {
+    const it = await api("/events/" + id); box.replaceChildren(h("div", { style: "font-weight:600" }, it.author_label || it.actor_label_id || "unknown author label"));
+    box.append(h("div", { class: "note" }, it.kind.replace(/_/g, " ") + " · " + (it.source_time || "no time") + (it.generated ? " · LLM-generated (secondary)" : "")));
+    const meta = h("div", { class: "mono note" }); meta.textContent = it.item_id + " ← " + it.source_file + " (" + it.source_table + ")"; box.appendChild(meta);
+    const needle = state.cur ? state.cur.raw : null;
+    if (it.lineage) {
+      const L = it.lineage; box.appendChild(h("h2", null, "Lineage"));
+      box.appendChild(h("div", null, L.status === "first_in_stream" ? "First item in this label's stream: earlier versions may exist outside the release (incomplete lineage), so nothing here is established as newly written." : "Compared with the previous item in the same label's stream (predecessor inferred from recorded time, not an explicit pointer)."));
+      box.appendChild(h("div", { class: "note" }, fmt(L.n_lines) + " lines: " + fmt(L.n_inherited) + " carried forward, " + fmt(L.n_new) + " new, " + fmt(L.n_modified) + " edited, " + fmt(L.n_restored) + " restored, " + fmt(L.n_first_observed) + " first seen."));
+      const wrap = h("div", { class: "lines", tabindex: 0, "aria-label": "Item text with line classification" }); const TAG = { inherited: "carried", new: "new", modified: "edited", restored: "restored", first_observed: "first seen", blank: "" };
+      (it.lines || []).forEach((l) => { const row = h("div", { class: "ln " + l.cls }); row.appendChild(h("span", { class: "g" }, TAG[l.cls] || "")); const x = h("span", { class: "x" }); highlighted(x, l.text, needle); row.appendChild(x); wrap.appendChild(row); }); box.appendChild(wrap);
+      if (it.lines_truncated) box.appendChild(h("div", { class: "note" }, "Showing the first lines only."));
+    } else { box.appendChild(h("h2", null, "Text")); const p = h("div", { class: "mono", style: "white-space:pre-wrap" }); highlighted(p, it.text.slice(0, 6000), needle); box.appendChild(p); if (it.text.length > 6000) box.appendChild(h("div", { class: "note" }, "Showing the first 6,000 characters.")); }
+    if ((it.artifacts || []).length) {
+      box.appendChild(h("h2", null, "Artifacts in this text"));
+      const ul = h("ul", { class: "list" });
+      it.artifacts.forEach((a) => { const li = h("li", { tabindex: 0 }); li.append(h("div", { class: "t" }, clip(a.raw, 80)), h("div", { class: "m" }, a.type.replace(/_/g, " ") + " · " + fmt(a.novel_items) + " new-text items · " + fmt(a.novel_labels) + " labels · here: " + a.novelty.replace(/_/g, " ")));
+        const go = async () => { await loadCase(a.artifact_id); await inspectItem(id); }; li.addEventListener("click", go); li.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); }); ul.appendChild(li); });
+      box.appendChild(ul);
+    }
+  } catch (err) { box.replaceChildren(h("div", { class: "note" }, String(err))); }
+  box.classList.remove("loading");
+}
+function inspectEdge(e) {
+  state.selEdge = e.src + e.dst; renderChart(); const box = $("insp"); box.replaceChildren(h("div", { style: "font-weight:600" }, e.relation.replace(/_/g, " ") + " link"));
+  box.appendChild(h("div", { class: "note" }, "Evidence tier: " + e.tier.replace(/_/g, " ") + " · order: " + e.temporal.replace(/_/g, " ") + " · undirected"));
+  box.appendChild(h("div", null, e.relation === "same_content" ? "The exact same string appears in the new text of both items. This does not show copying, direction, or that the labels are different agents." : "The two texts are similar. Similarity retrieves candidates; it is not a reference and never implies transmission."));
+  const ends = h("div", { class: "row" }); [["First item", e.src], ["Later item", e.dst]].forEach(([t, id]) => { const b = h("button", null, t); b.addEventListener("click", () => inspectItem(id)); ends.appendChild(b); }); box.appendChild(ends);
+  box.appendChild(h("h2", null, "Competing explanations")); const ul = h("ul"); ["a common external source (both read the same page or message)", "shared prompt, scaffold or template text", "independent discovery of the same resource", "text carried in a memory or goal handed to the later label"].forEach((t) => ul.appendChild(h("li", null, t))); box.appendChild(ul);
+  box.appendChild(h("h2", null, "Review this link"));
+  const ta = h("textarea", { rows: 3, placeholder: "Rationale (what in the text supports or undermines this link?)", "aria-label": "Review rationale" }); box.appendChild(ta);
+  const row = h("div", { class: "row" }); const status = h("span", { class: "note" });
+  [["accept", "Supported"], ["reject", "Not supported"], ["uncertain", "Uncertain"]].forEach(([d, label]) => { const b = h("button", { class: d }, label); b.addEventListener("click", async () => { try { const edgeId = e.edge_id || null; if (!edgeId) throw new Error("edge id missing"); await api("/reviews", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ edge_id: edgeId, decision: d, rationale: ta.value, reviewer: "local" }) }); status.textContent = "Recorded: " + label + " (append-only)."; } catch (err) { status.textContent = String(err); } }); row.appendChild(b); });
+  box.append(row, status);
+  const mine = state.reviews.filter((r) => r.edge_id === e.edge_id); if (mine.length) { box.appendChild(h("h2", null, "Previous reviews")); mine.forEach((r) => box.appendChild(h("div", { class: "note" }, r.created_at.slice(0, 16) + " · " + r.decision + (r.rationale ? ": " + r.rationale : "")))); }
+}
+
+// ---- controls ----
+function setView(v) { state.view = v; $("v-time").setAttribute("aria-pressed", v === "time"); $("v-graph").setAttribute("aria-pressed", v === "graph"); renderChart(); }
+$("v-time").addEventListener("click", () => setView("time")); $("v-graph").addEventListener("click", () => setView("graph"));
+$("b-cons").addEventListener("click", () => { state.conservative = !state.conservative; $("b-cons").setAttribute("aria-pressed", state.conservative); renderChart(); });
+async function exportCase(fmtName) { const r = await api("/cases/" + encodeURIComponent(state.cur.artifact_id) + "/export?format=" + fmtName); const blob = new Blob([r.body], { type: fmtName === "json" ? "application/json" : "text/markdown" }); const a = h("a", { href: URL.createObjectURL(blob), download: "swarmscope-case." + (fmtName === "json" ? "json" : "md") }); document.body.appendChild(a); a.click(); a.remove(); }
+$("b-md").addEventListener("click", () => exportCase("markdown")); $("b-json").addEventListener("click", () => exportCase("json"));
+$("b-home").addEventListener("click", () => { $("case").hidden = true; $("overview").hidden = false; [...$("cases").children].forEach((li) => li.classList.remove("sel")); });
+Promise.all([renderOverview(), renderCases()]).then(async () => {
+  const params = new URLSearchParams(location.hash.slice(1)); if (params.get("phrase")) { $("q").value = params.get("phrase"); await loadPhrase(params.get("phrase")); return; }
+  if (params.get("text")) return openFromText(params.get("text"));
+  const id = params.get("case"); if (!id) return;
+  await loadCase(id); const want = params.get("item"); if (!want) return;
+  const a = want === "@memory" ? state.cur.appearances.find((x) => x.kind === "memory") : { item_id: want };
+  if (a) await inspectItem(a.item_id);
+}).catch((e) => { $("cov").textContent = "Could not reach the API: " + e; });
+</script>
+</body>
+</html>

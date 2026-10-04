@@ -24,10 +24,10 @@ SHINGLE_WORDS = 5
 NUM_PERM = 64
 LSH_THRESHOLD = 0.3
 MAX_CANDIDATES = 20
-WINDOW_DAYS = 7
+WINDOW_DAYS = 2
 MIN_RARE = 2
 RARE_MAX_DF = 3
-POOL_LIMIT = 30_000
+POOL_LIMIT = 60_000
 MIN_WORDS = 8
 WORD_RE = re.compile(r"\w+", re.UNICODE)
 
@@ -75,23 +75,28 @@ def build_for_artifact(con: duckdb.DuckDBPyConnection, artifact_id: str) -> dict
     times = [s[2] for s in seed_units if s[2] is not None]
     if not seed_units or not times:
         return {"seeds": len(seed_units), "edges": 0}
-    lo, hi = min(times), max(times)
-    # Pool: chat text and non-inherited memory/goal lines from other labels near the seeds in time.
+    # Pool: chat text and non-inherited memory/goal lines from any label within WINDOW_DAYS of some seed, in a
+    # deterministic order so a truncated pool is reproducible (and reported, never silent).
+    con.execute("CREATE OR REPLACE TEMP TABLE _seed_times AS SELECT unnest(?::TIMESTAMP[]) AS ts", [times])
     pool_rows = con.execute(
         f"""
+        WITH near AS (
+            SELECT DISTINCT t.item_id FROM text_item t JOIN _seed_times s
+              ON t.time_ts BETWEEN s.ts - INTERVAL {WINDOW_DAYS} DAY AND s.ts + INTERVAL {WINDOW_DAYS} DAY
+            WHERE t.kind IN ('chat_agent', 'chat_human', 'memory', 'session_goal') AND NOT t.generated
+        )
         SELECT t.item_id, t.actor_label_id, t.time_ts, e.event_index, t.text, NULL AS line_no
-        FROM text_item t LEFT JOIN event e ON e.event_id = t.event_id
-        WHERE t.kind IN ('chat_agent', 'chat_human') AND NOT t.generated
-          AND t.time_ts BETWEEN ? - INTERVAL {WINDOW_DAYS} DAY AND ? + INTERVAL {WINDOW_DAYS} DAY
+        FROM near JOIN text_item t USING (item_id) LEFT JOIN event e ON e.event_id = t.event_id
+        WHERE t.kind IN ('chat_agent', 'chat_human')
         UNION ALL
         SELECT c.item_id, t.actor_label_id, t.time_ts, NULL, c.text, c.line_no
-        FROM text_change c JOIN text_item t USING (item_id)
+        FROM near JOIN text_change c USING (item_id) JOIN text_item t USING (item_id)
         WHERE c.classification IN ('new', 'modified', 'first_observed')
-          AND t.time_ts BETWEEN ? - INTERVAL {WINDOW_DAYS} DAY AND ? + INTERVAL {WINDOW_DAYS} DAY
-        LIMIT {POOL_LIMIT}
-        """,
-        [lo, hi, lo, hi],
+        ORDER BY 3, 1, 6 LIMIT {POOL_LIMIT + 1}
+        """
     ).fetchall()
+    truncated = len(pool_rows) > POOL_LIMIT
+    pool_rows = pool_rows[:POOL_LIMIT]
     pool = []
     for item_id, actor, ts, idx, text, line_no in pool_rows:
         sh = shingles(text)
@@ -144,4 +149,4 @@ def build_for_artifact(con: duckdb.DuckDBPyConnection, artifact_id: str) -> dict
                  _temporal(s_idx, p_idx, s_ts, p_ts), json.dumps(ALTERNATIVES), CANDIDATE_VERSION],
             )
             n_edges += 1
-    return {"seeds": len(seed_units), "pool": len(pool), "edges": n_edges}
+    return {"seeds": len(seed_units), "pool": len(pool), "pool_truncated": truncated, "edges": n_edges}

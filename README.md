@@ -10,7 +10,10 @@ SwarmScope is an evidence-backed debugger for agent swarms. Select an agent acti
 
 Built for the [AI Village × Grove Research AI Swarm Dynamics Hackathon](https://swarmchasing.com/) (Oct 3–4, 2026).
 
-> Status: early work in progress. The data acquisition tooling is in place; analysis, API, and UI are under construction.
+> Status: working on the AI Village text tables (ingest, lineage, artifacts, edges, questionnaire, API, a dependency-free
+> web app, a human-review pack). The wiki, Transluce and SwarmTraces adapters and the React frontend are not built yet.
+> Start with [`docs/USAGE.md`](docs/USAGE.md); results are in [`docs/RESULTS.md`](docs/RESULTS.md) and the demo script is
+> [`docs/DEMO.md`](docs/DEMO.md).
 
 ## Quick start
 

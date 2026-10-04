@@ -66,3 +66,20 @@ edges. No `possible_reuse` edges were built globally; similarity retrieval runs 
 Ingest 2 min; lineage about 25 min; artifact extraction 7,356 s (about 2 h; Python regex over 6.8 GB); edges 8 s;
 report 21 s; validation about 1 min. DB 9.5 GB; total new disk use about 12.7 GB including the raw download.
 Extraction is the one step worth optimizing before running on other large corpora.
+
+## Addendum: app, review pack, similarity candidates, demo cases
+- **App**: `uv run uvicorn backend.app.main:app --port 8765` serves a dependency-free three-pane page (search and cases,
+  timeline/graph with conservative mode, inspector with per-line lineage and append-only review). See `docs/USAGE.md`.
+  Measured on the real database: search about 1.5 s, full case about 2.5 s, graph 0.15 s.
+- **Similarity candidates are weak and slow on the full corpus.** Retrieval takes 20-60 s per case; its ±2-day
+  window still exceeds the 60,000-line pool cap (reported as `pool_truncated`), and across 6 sampled cases it found 3
+  `possible_reuse` candidates. "No candidates" means "none found in the searched pool". Needs an inverted index on
+  rare shingles before it is useful at scale.
+- **Human review pack** (`data/derived/review/`): 133 items, seeded and stratified, answers hidden from reviewers:
+  43 links (20 URL, 15 hex id, 5 repo-ref `same_content`, 3 `possible_reuse`), 40 artifact extractions, 30 lineage lines
+  (10 each inherited/new/modified), 20 question answers. No human has reviewed it yet, so **precision is still unmeasured**.
+- **Demo cases** (chosen by hand from the data; see `docs/DEMO.md`): a carryover case (767 full-text occurrences,
+  1 new, one label), a cross-label PR announcement, a Google Doc link flagged as a typo, a commit link passed
+  chat to memory to another label's memory, and a village-wide shared repo.
+- Figures: `data/derived/results/figures/` (report light/dark, app overview, five demo cases, review page); tables:
+  `data/derived/results/*.csv` and `results.json`.

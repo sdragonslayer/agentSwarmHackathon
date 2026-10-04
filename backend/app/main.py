@@ -14,12 +14,15 @@ from typing import Literal
 import duckdb
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from backend.analysis import export_case, questions
+from backend.analysis import export_case, inflation, questions, report
 from backend.db import DEFAULT_DB, connect
 
 MAX_GRAPH_NODES = 100
+MAX_ITEM_LINES = 600
+STATIC = Path(__file__).parent / "static"
 
 
 class ReviewIn(BaseModel):
@@ -84,6 +87,31 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             "order_note": "Items are sorted by recorded time, which is not established action order.",
         }
 
+    @app.get("/search/timeline")
+    def search_timeline(q: str = Query(min_length=2, max_length=200), kind: str | None = None,
+                        limit: int = Query(150, le=300)):
+        """Every text hit for a phrase, by author label over time. No links are inferred from a phrase match."""
+        con = db()
+        needle = q.replace("%", "").replace("_", "")
+        kind_sql, params = ("t.kind = ?", [kind]) if kind else ("t.kind <> 'memory'", [])
+        where = f"{kind_sql} AND NOT t.generated AND t.text ILIKE ?"
+        total = con.execute(f"SELECT count(*) FROM text_item t WHERE {where}", [*params, f"%{needle}%"]).fetchone()[0]
+        rows = con.execute(
+            f"SELECT t.item_id, coalesce(l.display_name, t.actor_label_id, 'unknown author label'), t.actor_label_id, "
+            f"t.kind, t.time_ts, e.event_index, strpos(lower(t.text), lower(?)) AS pos, t.text "
+            f"FROM text_item t LEFT JOIN actor_label l ON l.label_id = t.actor_label_id "
+            f"LEFT JOIN event e ON e.event_id = t.event_id WHERE {where} ORDER BY t.time_ts NULLS LAST, t.item_id "
+            f"LIMIT ?", [needle, *params, f"%{needle}%", limit]).fetchall()
+        apps = []
+        for item_id, label, lid, k, ts, idx, pos, text in rows:
+            a = max(pos - 61, 0)
+            apps.append({"item_id": item_id, "label": label, "label_id": lid, "kind": k, "time": str(ts) if ts else None,
+                         "novelty": "standalone", "event_index": idx,
+                         "snippet": {"before": text[a:pos - 1], "match": text[pos - 1:pos - 1 + len(needle)],
+                                     "after": text[pos - 1 + len(needle):pos - 1 + len(needle) + 60]}})
+        return {"query": q, "total": total, "shown": len(apps), "appearances": apps,
+                "note": "A phrase match is not a reference or a link; no edges are drawn."}
+
     @app.get("/events/{item_id:path}")
     def get_item(item_id: str):
         con = db()
@@ -98,12 +126,27 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         cols = ["item_id", "kind", "actor_label_id", "author_label", "event_id", "room_id", "source_time", "text",
                 "source_file", "source_table", "source_id", "generated"]
         item = dict(zip(cols, row, strict=True))
-        item["text"] = item["text"][:20000]
+        full_text = item["text"]
+        item["text"] = full_text[:20000]
         ls = con.execute(
             "SELECT lineage_status, base_item_id, n_lines, n_inherited, n_new, n_modified, n_restored, "
             "n_first_observed FROM lineage_summary WHERE item_id = ?", [item_id]).fetchone()
         item["lineage"] = dict(zip(["status", "base_item_id", "n_lines", "n_inherited", "n_new", "n_modified",
                                     "n_restored", "n_first_observed"], ls, strict=True)) if ls else None
+        if ls:
+            cls = dict(con.execute("SELECT line_no, classification FROM text_change WHERE item_id = ?",
+                                   [item_id]).fetchall())
+            raw_lines = full_text.split("\n")
+            item["lines"] = [{"n": n, "text": t[:600], "cls": cls.get(n, "inherited") if t.strip() else "blank"}
+                             for n, t in enumerate(raw_lines[:MAX_ITEM_LINES])]
+            item["lines_truncated"] = len(raw_lines) > MAX_ITEM_LINES
+        item["artifacts"] = [
+            dict(zip(["artifact_id", "type", "raw", "novel_items", "novel_labels", "novelty"], r, strict=True))
+            for r in con.execute(
+                "SELECT a.artifact_id, x.artifact_type, x.raw, c.novel_items, c.novel_labels, min(a.novelty) "
+                "FROM appearance a JOIN artifact x USING (artifact_id) JOIN artifact_counts c USING (artifact_id) "
+                "WHERE a.item_id = ? GROUP BY a.artifact_id, x.artifact_type, x.raw, c.novel_items, c.novel_labels "
+                "ORDER BY c.novel_labels DESC, c.novel_items DESC LIMIT 30", [item_id]).fetchall()]
         item["changes"] = [
             dict(zip(["line_no", "text", "classification", "similarity"], r, strict=True))
             for r in con.execute("SELECT line_no, text, classification, similarity FROM text_change "
@@ -178,6 +221,56 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         con.execute("INSERT INTO review VALUES (?, ?, ?, ?, ?, ?)",
                     [rid, r.edge_id, r.decision, r.rationale, r.reviewer, datetime.now(UTC).isoformat()])
         return {"review_id": rid}
+
+    cache: dict[str, list] = {}
+
+    @app.get("/stats")
+    def stats():
+        con = db()
+        counts = {t: con.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
+                  for t in ("event", "text_item", "actor_label", "artifact", "appearance", "evidence_edge")}
+        return {"scope": counts, "inflation": inflation.headline(con, top=12)}
+
+    @app.get("/cases")
+    def list_cases():
+        """Inspectable seed artifacts: shared across labels, plus one carryover example (see report.pick_cases)."""
+        con = db()
+        if "cases" not in cache:
+            out = []
+            for aid, kind in report.pick_cases(con):
+                atype, raw = con.execute("SELECT artifact_type, raw FROM artifact WHERE artifact_id = ?",
+                                         [aid]).fetchone()
+                c = con.execute("SELECT full_occurrences, novel_occurrences, full_items, novel_items, full_labels, "
+                                "novel_labels FROM artifact_counts WHERE artifact_id = ?", [aid]).fetchone()
+                out.append({"artifact_id": aid, "type": atype, "raw": raw, "case_kind": kind,
+                            "counts": dict(zip(["full_occurrences", "novel_occurrences", "full_items", "novel_items",
+                                                "full_labels", "novel_labels"], c, strict=True))})
+            cache["cases"] = out
+        return {"cases": cache["cases"]}
+
+    @app.get("/cases/{artifact_id}")
+    def case_detail(artifact_id: str):
+        con = db()
+        if not con.execute("SELECT 1 FROM artifact WHERE artifact_id = ?", [artifact_id]).fetchone():
+            raise HTTPException(404, "unknown artifact")
+        return report.case_payload(con, artifact_id, "selected")
+
+    @app.get("/cases/{artifact_id}/reviews")
+    def case_reviews(artifact_id: str):
+        con = db()
+        rows = con.execute(
+            "SELECT r.review_id, r.edge_id, r.decision, r.rationale, r.reviewer, r.created_at FROM review r "
+            "JOIN evidence_edge e USING (edge_id) WHERE e.artifact_id = ? ORDER BY r.created_at", [artifact_id]
+        ).fetchall()
+        return {"reviews": [dict(zip(["review_id", "edge_id", "decision", "rationale", "reviewer", "created_at"], r,
+                                     strict=True)) for r in rows]}
+
+    @app.get("/", include_in_schema=False)
+    @app.get("/app", include_in_schema=False)
+    def frontend():
+        return FileResponse(STATIC / "index.html", headers={
+            "Content-Security-Policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; "
+                                       "script-src 'self' 'unsafe-inline'; img-src 'self' data:"})
 
     return app
 

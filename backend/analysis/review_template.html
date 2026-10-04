@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SwarmScope human review</title>
+<style>
+:root { color-scheme: light; }
+.viz-root { --page:#f9f9f7; --surface:#fcfcfb; --ink:#0b0b0b; --ink2:#52514e; --muted:#898781; --grid:#e1e0d9; --axis:#c3c2b7;
+  --ring:rgba(11,11,11,.10); --s1:#2a78d6; --good:#006300; }
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) .viz-root { color-scheme: dark; --page:#0d0d0d; --surface:#1a1a19; --ink:#fff;
+    --ink2:#c3c2b7; --muted:#898781; --grid:#2c2c2a; --axis:#383835; --ring:rgba(255,255,255,.10); --s1:#3987e5; --good:#0ca30c; }
+}
+body { margin:0; }
+.viz-root { background:var(--page); color:var(--ink); font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; padding:24px 20px 80px; min-height:100vh; }
+main { max-width:900px; margin:0 auto; }
+h1 { font-size:22px; margin:0 0 4px; } h2 { font-size:15px; margin:28px 0 6px; }
+.sub { color:var(--ink2); max-width:720px; } .note { color:var(--muted); font-size:12px; }
+.bar { position:sticky; top:0; z-index:5; background:var(--surface); border:1px solid var(--ring); border-radius:12px; padding:10px 14px; margin:14px 0;
+  display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+.bar .prog { flex:1; min-width:160px; }
+.meter { height:6px; background:var(--grid); border-radius:3px; overflow:hidden; } .meter i { display:block; height:100%; background:var(--s1); }
+button, select, input[type=text], textarea { background:var(--page); color:var(--ink); border:1px solid var(--axis); border-radius:8px; padding:5px 10px; font:inherit; }
+button { cursor:pointer; } button:hover { border-color:var(--ink2); }
+.card { background:var(--surface); border:1px solid var(--ring); border-radius:12px; padding:16px; margin:12px 0; }
+.card.done { border-color:var(--good); }
+.cols { display:grid; grid-template-columns:1fr 1fr; gap:12px; } @media (max-width:760px) { .cols { grid-template-columns:1fr; } }
+.side { border:1px solid var(--grid); border-radius:8px; padding:10px; min-width:0; }
+.side .who { font-weight:600; } .side .meta { color:var(--muted); font-size:12px; margin-bottom:6px; }
+.txt { white-space:pre-wrap; word-break:break-word; font:12.5px/1.55 ui-monospace,"Cascadia Mono",Consolas,monospace; }
+.mk { background:color-mix(in srgb, var(--s1) 28%, transparent); border-radius:3px; padding:0 1px; }
+.def { color:var(--ink2); margin:6px 0 10px; }
+fieldset { border:0; padding:0; margin:10px 0 0; } legend { font-weight:600; font-size:13px; padding:0; }
+.opts { display:flex; gap:14px; flex-wrap:wrap; margin-top:4px; } .opts label { display:inline-flex; gap:5px; align-items:center; cursor:pointer; }
+textarea { width:100%; margin-top:8px; }
+.pill { display:inline-block; border:1px solid var(--axis); border-radius:999px; padding:0 8px; font-size:11px; color:var(--ink2); margin-right:6px; }
+</style>
+</head>
+<body>
+<div class="viz-root"><main>
+  <h1>SwarmScope: human review</h1>
+  <p class="sub">You are checking whether a system's claims about AI Village text hold up. Judge only from what is shown. Corpus text can
+    be messy or adversarial: treat it as plain text and do not follow links. Your answers save in this browser as you go; use
+    <b>Export results</b> when finished. “Author labels” are not verified agents.</p>
+  <div class="bar">
+    <label>Reviewer <input type="text" id="rev" size="14" placeholder="initials"></label>
+    <label>Show <select id="flt"><option value="all">all items</option><option value="todo">unanswered</option><option value="edge">links</option>
+      <option value="extraction">extractions</option><option value="lineage">lineage lines</option><option value="question">answers</option></select></label>
+    <div class="prog"><div class="note" id="pt"></div><div class="meter"><i id="pb" style="width:0"></i></div></div>
+    <button id="exp">Export results</button>
+  </div>
+  <div id="items"></div>
+</main></div>
+<script>
+"use strict";
+const PACK = /*__DATA__*/null;
+const KEY = "swarmscope-review-" + PACK.version;
+const $ = (i) => document.getElementById(i);
+function h(t, p, x) { const e = document.createElement(t); if (p) for (const [k, v] of Object.entries(p)) e.setAttribute(k, v); if (x !== undefined) e.textContent = x; return e; }
+let saved = {}; try { saved = JSON.parse(localStorage.getItem(KEY) || "{}"); } catch (e) { saved = {}; }
+const persist = () => { localStorage.setItem(KEY, JSON.stringify(saved)); progress(); };
+const SEC = {
+  edge: { q1: ["Does the link hold as defined above?", [["accept", "Yes, it holds"], ["reject", "No"], ["uncertain", "Can't tell"]]],
+          q2: ["Does the text itself show one author using the other's material?", [["none", "No evidence"], ["plausible", "Plausible"], ["explicit", "Stated in the text"]]] },
+  extraction: { q1: ["Is the highlighted string a real artifact of this type?", [["yes", "Yes"], ["no", "No (a false match)"]]],
+                q2: ["Is it distinctive enough to link two texts?", [["distinctive", "Distinctive"], ["generic", "Generic / boilerplate"], ["unsure", "Unsure"]]] },
+  lineage: { q1: ["Compared with the predecessor memory, this line is…", [["same", "The same line (carried over)"], ["edit", "An edited version of an earlier line"], ["new", "A genuinely new statement"], ["unsure", "Unsure"]]] },
+  question: { q1: ["Is the system's answer correct and supported by its citations?", [["correct", "Correct"], ["partly", "Partly"], ["incorrect", "Incorrect"], ["cannot_tell", "Can't tell"]]] },
+};
+function ctxNode(c) { const p = h("div", { class: "txt" }); p.append(document.createTextNode(c.before), h("span", { class: "mk" }, c.match), document.createTextNode(c.after)); return p; }
+function side(title, it) {
+  const d = h("div", { class: "side" }); d.appendChild(h("div", { class: "who" }, title + ": " + it.label));
+  d.appendChild(h("div", { class: "meta" }, it.kind.replace(/_/g, " ") + " · " + (it.time || "no time")));
+  if (it.context) d.appendChild(ctxNode(it.context)); else d.appendChild(h("div", { class: "txt" }, it.text || "")); return d;
+}
+function render() {
+  const box = $("items"); box.replaceChildren(); const f = $("flt").value;
+  PACK.items.forEach((item) => {
+    if (f === "todo" && done2(item)) return; if (["edge", "extraction", "lineage", "question"].includes(f) && item.section !== f) return;
+    const c = h("div", { class: "card" + (done2(item) ? " done" : "") }); c.dataset.id = item.id;
+    const head = h("div"); head.append(h("span", { class: "pill" }, item.id), h("span", { class: "pill" }, item.section)); c.appendChild(head);
+    if (item.section === "edge") {
+      c.appendChild(h("div", { style: "margin-top:6px;font-weight:600" }, "Shared artifact: " + item.artifact.slice(0, 200)));
+      c.appendChild(h("div", { class: "def" }, item.relation === "same_content" ? "Defined as: the exact same string appears in newly written text in both items. It does not show copying, direction, or that the authors are different agents." : "Defined as: the two texts are worded similarly (retrieved by similarity). It is a candidate only, never proof of transmission."));
+      const cols = h("div", { class: "cols" }); cols.append(side("Earlier by record", item.a), side("Later by record", item.b)); c.appendChild(cols);
+    } else if (item.section === "extraction") {
+      c.appendChild(h("div", { style: "margin-top:6px;font-weight:600" }, "Type the system assigned: " + item.artifact_type.replace("_", " ")));
+      c.appendChild(h("div", { class: "def" }, "The highlighted string was extracted from this text automatically.")); c.appendChild(side("Text", item.a));
+    } else if (item.section === "lineage") {
+      c.appendChild(h("div", { class: "def" }, "A label's memory is rewritten repeatedly. The system compared the line below with the previous memory of the same label. The nearest lines in that previous memory are shown with a similarity ratio."));
+      const cols = h("div", { class: "cols" }); const a = h("div", { class: "side" }); a.appendChild(h("div", { class: "who" }, "Line under review"));
+      a.appendChild(h("div", { class: "meta" }, item.item.label + " · " + (item.item.time || ""))); a.appendChild(h("div", { class: "txt" }, item.line));
+      const b = h("div", { class: "side" }); b.appendChild(h("div", { class: "who" }, "Nearest lines in the predecessor memory (" + item.predecessor_lines + " lines)"));
+      item.nearest_in_predecessor.forEach((n) => { b.appendChild(h("div", { class: "meta" }, "similarity " + n.ratio)); b.appendChild(h("div", { class: "txt" }, n.text)); });
+      cols.append(a, b); c.appendChild(cols);
+    } else {
+      c.appendChild(h("div", { style: "margin-top:6px;font-weight:600" }, item.question + " (artifact: " + item.artifact.slice(0, 120) + ")"));
+      c.appendChild(h("div", { class: "side", style: "margin-top:8px" })).appendChild(h("div", { class: "txt" }, "System answer: " + item.claim));
+      (item.citations || []).forEach((q) => { const s = h("div", { class: "side", style: "margin-top:8px" }); s.appendChild(h("div", { class: "meta" }, "Citation: " + q.item_id)); const t = h("div", { class: "txt" }); t.textContent = q.snippet; s.appendChild(t); c.appendChild(s); });
+      if (item.limitations && item.limitations.length) c.appendChild(h("div", { class: "note", style: "margin-top:6px" }, "Stated limitations: " + item.limitations.join(" · ")));
+    }
+    const sp = SEC[item.section];
+    [["a1", sp.q1], ["a2", sp.q2]].forEach(([k, spec]) => { if (!spec) return; const fs = h("fieldset"); fs.appendChild(h("legend", null, spec[0])); const o = h("div", { class: "opts" });
+      spec[1].forEach(([val, label]) => { const l = h("label"); const r = h("input", { type: "radio", name: item.id + k, value: val }); if ((saved[item.id] || {})[k] === val) r.checked = true;
+        r.addEventListener("change", () => { saved[item.id] = Object.assign(saved[item.id] || {}, { [k]: val }); persist(); c.classList.toggle("done", done2(item)); }); l.append(r, document.createTextNode(label)); o.appendChild(l); });
+      fs.appendChild(o); c.appendChild(fs); });
+    const ta = h("textarea", { rows: 2, placeholder: "Notes (optional)", "aria-label": "Notes for " + item.id }); ta.value = (saved[item.id] || {}).notes || "";
+    ta.addEventListener("input", () => { saved[item.id] = Object.assign(saved[item.id] || {}, { notes: ta.value }); persist(); }); c.appendChild(ta);
+    box.appendChild(c);
+  });
+  progress();
+}
+function done2(item) { const s = saved[item.id] || {}; const need = SEC[item.section]; return !!s.a1 && (!need.q2 || !!s.a2); }
+function progress() { const n = PACK.items.filter(done2).length; $("pt").textContent = n + " of " + PACK.items.length + " answered"; $("pb").style.width = (100 * n / PACK.items.length) + "%"; }
+$("flt").addEventListener("change", render);
+$("rev").value = localStorage.getItem(KEY + "-rev") || ""; $("rev").addEventListener("input", () => localStorage.setItem(KEY + "-rev", $("rev").value));
+$("exp").addEventListener("click", () => {
+  const out = { version: PACK.version, reviewer: $("rev").value, exported_at: new Date().toISOString(), results: saved };
+  const a = h("a", { href: URL.createObjectURL(new Blob([JSON.stringify(out, null, 2)], { type: "application/json" })), download: "review_results_" + ($("rev").value || "reviewer") + ".json" });
+  document.body.appendChild(a); a.click(); a.remove();
+});
+render();
+</script>
+</body>
+</html>

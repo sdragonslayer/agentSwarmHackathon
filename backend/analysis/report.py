@@ -79,16 +79,16 @@ def case_payload(con: duckdb.DuckDBPyConnection, artifact_id: str, case_kind: st
     ]
     keep = {a["item_id"] for a in apps}
     edges = [
-        {"src": s, "dst": d, "relation": r, "tier": tier, "temporal": tmp}
-        for s, d, r, tier, tmp in con.execute(
-            "SELECT src_item_id, dst_item_id, relation, evidence_tier, temporal_status FROM evidence_edge "
+        {"edge_id": eid, "src": s, "dst": d, "relation": r, "tier": tier, "temporal": tmp}
+        for eid, s, d, r, tier, tmp in con.execute(
+            "SELECT edge_id, src_item_id, dst_item_id, relation, evidence_tier, temporal_status FROM evidence_edge "
             "WHERE artifact_id = ?",
             [artifact_id],
         ).fetchall()
         if s in keep and d in keep
     ]
     answers = [
-        {k: a[k] for k in ("id", "question", "claim", "status", "limitations")}
+        {k: a[k] for k in ("id", "question", "claim", "status", "citations", "limitations")}
         for a in questions.answer_all(con, artifact_id)
     ]
     return {
