@@ -89,7 +89,7 @@ details { margin-top: 8px; } summary { cursor: pointer; color: var(--ink2); font
 <body>
 <div class="viz-root">
 <header>
-  <h1>SwarmScope</h1><span class="tag">Trace the handoff. Inspect the evidence.</span>
+  <h1>SwarmScope</h1><span class="tag">Trace the handoff. Inspect the evidence.</span><span class="pill" id="src"></span>
   <span class="cov" id="cov">loading…</span>
 </header>
 <div class="panes">
@@ -97,7 +97,7 @@ details { margin-top: 8px; } summary { cursor: pointer; color: var(--ink2); font
     <h2><label for="q">Search</label></h2>
     <form id="sf" class="row"><input id="q" type="search" placeholder="URL, commit id, phrase…" minlength="2" autocomplete="off">
       <button type="submit">Search</button></form>
-    <label class="note"><input type="checkbox" id="incl-mem"> include agent memories (slower, mostly repeated text)</label>
+    <label class="note" id="incl-wrap" hidden><input type="checkbox" id="incl-mem"> include agent memories (slower, mostly repeated text)</label>
     <div class="note">Matches artifact strings and chat/goal text anywhere in the string. Click an artifact for its case; click a text hit to open its most-shared artifact.</div>
     <div id="results"></div>
     <h2>Cases</h2>
@@ -106,7 +106,9 @@ details { margin-top: 8px; } summary { cursor: pointer; color: var(--ink2); font
   </section>
 
   <main class="pane" aria-label="Timeline and evidence">
+    <div class="row" id="tabs"><button id="tab-ov" aria-pressed="true">Overview</button><button id="tab-top" aria-pressed="false">Topics &amp; traces</button></div>
     <div id="overview"></div>
+    <div id="topics" hidden></div>
     <div id="case" hidden>
       <div class="card">
         <div id="c-title" style="font-weight:600"></div>
@@ -115,6 +117,8 @@ details { margin-top: 8px; } summary { cursor: pointer; color: var(--ink2); font
           <button id="v-time" aria-pressed="true">Timeline</button>
           <button id="v-graph" aria-pressed="false">Graph</button>
           <button id="b-cons" aria-pressed="false" title="Show only links whose order is established by the source's own sequence">Conservative mode</button>
+          <button id="b-even" aria-pressed="false" title="Space dots evenly in recorded order (timeline only); useful when events cluster">Even spacing</button>
+          <button id="b-links" aria-pressed="false" title="Show every link at full strength instead of fading them until you hover">All links bold</button>
           <button id="b-md">Export Markdown</button><button id="b-json">Export JSON</button>
           <button id="b-home">Back to overview</button>
         </div>
@@ -144,7 +148,7 @@ const clip = (v, n) => { v = String(v); return v.length > n ? v.slice(0, n - 1) 
 function h(tag, props, text) { const e = document.createElement(tag); if (props) for (const [k, v] of Object.entries(props)) e.setAttribute(k, v); if (text !== undefined) e.textContent = text; return e; }
 function s(tag, props, text) { const e = document.createElementNS(NS, tag); if (props) for (const [k, v] of Object.entries(props)) e.setAttribute(k, v); if (text !== undefined) e.textContent = text; return e; }
 async function api(path, opts) { const r = await fetch(path, opts); if (!r.ok) throw new Error(path + " → " + r.status); return r.json(); }
-const state = { cases: [], cur: null, view: "time", conservative: false, selItem: null, selEdge: null, reviews: [] };
+const state = { cases: [], cur: null, view: "time", conservative: false, even: false, links: "auto", selItem: null, selEdge: null, reviews: [] };
 
 // ---- tooltip ----
 const tip = $("tip");
@@ -176,15 +180,16 @@ function table(cols, rows) {
 }
 
 // ---- overview ----
-const STREAM = { mem: "Agent memories", sgoal: "Session goals" };
 async function renderOverview() {
   const st = await api("/stats"), inf = st.inflation;
+  document.title = "SwarmScope: " + st.source_label; $("src").textContent = st.source_label; $("incl-wrap").hidden = !(st.text_kinds || []).includes("memory");
   $("cov").textContent = fmt(st.scope.event) + " events · " + fmt(st.scope.text_item) + " text items · " + fmt(st.scope.actor_label) + " author labels (not verified agents)";
-  const tot = inf.line_level_by_stream.reduce((a, r) => ({ l: a.l + r.lines, i: a.i + r.inherited_lines }), { l: 0, i: 0 });
+  const tot = inf.line_level_by_stream.reduce((a, r) => ({ l: a.l + r.lines, i: a.i + r.inherited_lines, r: a.r + r.restored_lines }), { l: 0, i: 0, r: 0 });
+  const names = inf.line_level_by_stream.map((r) => r.label.toLowerCase()).join(" and ");
   const ov = $("overview"); ov.replaceChildren();
   const hero = h("div", { class: "card" });
   hero.append(h("div", { class: "hero" }, tot.l ? pct(tot.i / tot.l) : "n/a"),
-    h("div", null, "of " + fmt(tot.l) + " lines in agent memories and session goals are carried forward unchanged from the same label's previous version, so they are not new utterances."));
+    h("div", null, "of " + fmt(tot.l) + " lines in " + (names || "the loaded text streams") + " are carried forward unchanged from the previous version of the same text, so they are not new utterances." + (tot.r ? " A further " + pct(tot.r / tot.l) + " are restored (reappear after removal), which is not new authorship either." : "")));
   ov.appendChild(hero);
   const c1 = h("div", { class: "card" }); c1.append(h("div", { style: "font-weight:600" }, "Occurrence inflation by artifact type"),
     h("div", { class: "note" }, "Occurrences in all text vs. in non-inherited text only. A count of text occurrences, not an estimate of false transmission."));
@@ -200,12 +205,95 @@ async function renderOverview() {
   const d = h("details"); d.appendChild(h("summary", null, "Table view"));
   d.appendChild(table([{ label: "Type", get: (t) => NAMES[t.artifact_type] || t.artifact_type }, { label: "Distinct", get: (t) => fmt(t.artifacts) }, { label: "Full", get: (t) => fmt(t.full_occurrences) }, { label: "New", get: (t) => fmt(t.novel_occurrences) }, { label: "In 2+ labels", get: (t) => fmt(t.artifacts_in_2plus_labels.novel) }], types)); c1.appendChild(d); ov.appendChild(c1);
   const c2 = h("div", { class: "card" }); c2.appendChild(h("div", { style: "font-weight:600" }, "Carried-forward share by stream"));
-  inf.line_level_by_stream.forEach((r) => { const row = h("div", { class: "row" }); row.append(h("span", { style: "width:130px" }, STREAM[r.stream] || r.stream), h("span", { class: "val" }, r.inherited_share === null ? "n/a" : pct(r.inherited_share)), h("span", { class: "note" }, fmt(r.inherited_lines) + " of " + fmt(r.lines) + " lines in " + fmt(r.items) + " items")); c2.appendChild(row); });
+  inf.line_level_by_stream.forEach((r) => { const row = h("div", { class: "row" }); row.append(h("span", { style: "width:150px" }, r.label), h("span", { class: "val" }, r.inherited_share === null ? "n/a" : pct(r.inherited_share)), h("span", { class: "note" }, fmt(r.inherited_lines) + " of " + fmt(r.lines) + " lines in " + fmt(r.items) + " items")); c2.appendChild(row); });
   ov.appendChild(c2);
   const c3 = h("div", { class: "card" }); c3.append(h("div", { style: "font-weight:600" }, "Most inflated artifacts"), h("div", { class: "note" }, "Click one to inspect it."));
   const ul = h("ul", { class: "list" });
   inf.most_inflated_artifacts.forEach((a) => { const li = h("li", { tabindex: 0 }); li.append(h("div", { class: "t" }, clip(a.raw, 90)), h("div", { class: "m" }, a.type + " · " + fmt(a.full_occurrences) + " full vs " + fmt(a.novel_occurrences) + " new · " + fmt(a.full_items) + " items / " + fmt(a.novel_items) + " new-text items")); li.addEventListener("click", () => loadCase(a.artifact_id)); li.addEventListener("keydown", (e) => { if (e.key === "Enter") loadCase(a.artifact_id); }); ul.appendChild(li); });
   c3.appendChild(ul); ov.appendChild(c3);
+}
+
+// ---- panes and the topics & traces tab ----
+function showPane(name) {
+  $("overview").hidden = name !== "overview"; $("topics").hidden = name !== "topics"; $("case").hidden = name !== "case";
+  $("tab-ov").setAttribute("aria-pressed", name === "overview"); $("tab-top").setAttribute("aria-pressed", name === "topics");
+  if (name === "topics" && !$("topics").dataset.loaded) { $("topics").dataset.loaded = "1"; renderTopics().catch((e) => $("topics").replaceChildren(h("div", { class: "note" }, String(e)))); }
+}
+$("tab-ov").addEventListener("click", () => showPane("overview")); $("tab-top").addEventListener("click", () => showPane("topics"));
+const CAT_NAMES = { answer_sharing: "Answers", request_relay: "Asks to relay", timing_sync: "Timing / sync", bypass_circumvention: "Bypass / proxy", environment_research: "Environment", data_access: "Data access", probing_testing: "Probing / tests", confirmation: "Confirmations", self_identification: "Self-identification" };
+function ramp(t) { // one-hue sequential ramp (light to dark blue) as an rgb string; t in [0,1]
+  const lo = [205, 226, 251], hi = [24, 79, 149]; return "rgb(" + lo.map((v, i) => Math.round(v + (hi[i] - v) * t)).join(",") + ")";
+}
+async function renderTopics() {
+  const box = $("topics"); box.replaceChildren(h("div", { class: "note" }, "Loading…"));
+  const [m, sm, ex, hs] = await Promise.all([api("/topics/matrix"), api("/traces/summary"), api("/traces/exchanges?limit=12"), api("/traces/hosts?min_labels=10")]);
+  box.replaceChildren();
+  if (!m.available) { box.appendChild(h("div", { class: "card" }, m.note)); return; }
+  const intro = h("div", { class: "card" }); intro.append(h("div", { style: "font-weight:600" }, "What are labels doing, by topic?"),
+    h("div", { class: "note" }, "Topics are the source's own page classification (with its stated confidence). Each cell is the share of that topic's revisions whose NEW text contains a cue word from config/lexicon.toml; carried-forward and restored text never counts. " + m.caveat));
+  box.appendChild(intro);
+
+  // heatmap: topics x cue categories
+  const cats = m.categories, rows = m.topics, CW = 78, RH = 26, L = 210, top = 54, W = L + cats.length * CW + 10, H = top + rows.length * RH + 8;
+  const svg = s("svg", { viewBox: "0 0 " + W + " " + H, width: "100%", role: "img", "aria-label": "Share of revisions with each cue, by topic" });
+  cats.forEach((c, j) => { const tx = s("text", { x: L + j * CW + CW / 2, y: top - 8, "text-anchor": "start", transform: "rotate(-30 " + (L + j * CW + CW / 2) + " " + (top - 8) + ")" }, CAT_NAMES[c] || c); svg.appendChild(tx); });
+  const maxShare = Math.max(0.01, ...rows.flatMap((r) => cats.map((c) => (r.items_total ? r.cells[c].items / r.items_total : 0))));
+  let picked = null; const exBox = h("div", { class: "card" }); exBox.hidden = true;
+  rows.forEach((r, i) => {
+    svg.appendChild(s("text", { x: L - 8, y: top + i * RH + 17, "text-anchor": "end" }, clip(r.topic, 30) + " (" + fmt(r.items_total) + ")"));
+    cats.forEach((c, j) => { const cell = r.cells[c], share = r.items_total ? cell.items / r.items_total : 0, t = Math.sqrt(share / maxShare);
+      const g = s("g", { tabindex: 0, role: "button", "aria-label": r.topic + ", " + (CAT_NAMES[c] || c) + ": " + cell.items + " revisions" });
+      g.appendChild(s("rect", { x: L + j * CW + 1, y: top + i * RH + 1, width: CW - 2, height: RH - 2, rx: 4, fill: cell.items ? ramp(t) : "var(--grid)", opacity: cell.items ? 1 : 0.5, style: "cursor:pointer" }));
+      if (cell.items) g.appendChild(s("text", { x: L + j * CW + CW / 2, y: top + i * RH + 17, "text-anchor": "middle", style: "fill:" + (t > 0.55 ? "#fff" : "#0b0b0b") + ";font-weight:600" }, fmt(cell.items)));
+      hover(g, [["t1", (CAT_NAMES[c] || c) + " · " + r.topic], ["t2", fmt(cell.items) + " of " + fmt(r.items_total) + " revisions (" + pct(share) + ") · " + fmt(cell.labels) + " labels · " + fmt(cell.hits) + " cue hits"]]);
+      const open = async () => { if (!cell.items) return; exBox.hidden = false; exBox.replaceChildren(h("div", { class: "note" }, "Loading examples…"));
+        const e = await api("/topics/examples?topic=" + encodeURIComponent(r.topic) + "&category=" + encodeURIComponent(c) + "&limit=10");
+        exBox.replaceChildren(h("div", { style: "font-weight:600" }, (CAT_NAMES[c] || c) + " · " + r.topic), h("div", { class: "note" }, "Ten random revisions with this cue in new text. Click one to read it."));
+        e.examples.forEach((x) => { const row = h("div", { class: "q", style: "cursor:pointer" }); const p = h("div", { class: "mono" }); p.append(document.createTextNode(x.snippet.before), h("span", { class: "mk" }, x.snippet.match), document.createTextNode(x.snippet.after));
+          row.append(h("div", { class: "note" }, x.label + " · " + (x.time || "no time")), p); row.addEventListener("click", () => inspectItem(x.item_id)); exBox.appendChild(row); }); };
+      g.addEventListener("click", open); g.addEventListener("keydown", (ev) => { if (ev.key === "Enter") open(); }); svg.appendChild(g); });
+  });
+  const hm = h("div", { class: "card" }); hm.append(h("div", { style: "font-weight:600" }, "Cue share by topic"), h("div", { class: "note" }, "Darker = larger share of that topic's revisions. Number = revisions. Click a cell for examples."), svg);
+  const det = h("details"); det.appendChild(h("summary", null, "Table view")); det.appendChild(table([{ label: "Topic", get: (r) => r.topic }, { label: "Revisions", get: (r) => fmt(r.items_total) }, ...cats.map((c) => ({ label: CAT_NAMES[c] || c, get: (r) => fmt(r.cells[c].items) }))], rows)); hm.appendChild(det);
+  box.append(hm, exBox);
+
+  // per-topic explicit coordination traces
+  const prov = Object.fromEntries((sm.answer_provenance || []).map((p) => [p.topic, p]));
+  const tc = h("div", { class: "card" }); tc.append(h("div", { style: "font-weight:600" }, "Explicit traces by topic"), h("div", { class: "note" }, "Counts of recorded things, not scores. 'Pointer share' = of later repetitions of an answer number by a label that had not written it, the share whose revision also names or links an earlier writer. The rest may be independent work on the same data or reading without naming."));
+  tc.appendChild(table([{ label: "Topic", get: (r) => r.topic }, { label: "Revisions", get: (r) => fmt(r.revisions) }, { label: "Labels", get: (r) => fmt(r.labels) },
+    { label: "Label mentions", get: (r) => fmt(r.label_mentions || 0) }, { label: "Refs to others' pages", get: (r) => fmt(r.refs_to_pages_never_written_by_author || 0) }, { label: "Exchanges", get: (r) => fmt(r.exchanges || 0) },
+    { label: "Answer repetitions", get: (r) => (prov[r.topic] ? fmt(prov[r.topic].repetitions_by_new_labels) : "0") }, { label: "Pointer share", get: (r) => (prov[r.topic] && prov[r.topic].share_with_pointer !== null ? pct(prov[r.topic].share_with_pointer) : "n/a") }], sm.topics.slice(0, 14)));
+  box.appendChild(tc);
+
+  // exchanges
+  const xc = h("div", { class: "card" }); xc.append(h("div", { style: "font-weight:600" }, "Mutual-naming exchanges"), h("div", { class: "note" }, ex.definition + " Shortest replies first."));
+  if (!ex.exchanges.length) xc.appendChild(h("div", { class: "note" }, "None found."));
+  ex.exchanges.forEach((e) => { const row = h("div", { class: "q" }); row.append(h("div", { style: "font-weight:600" }, e.a.label + " → " + e.b.label + " · reply after " + (e.seconds >= 120 ? Math.round(e.seconds / 60) + " min" : e.seconds + " s") + " · " + e.topic));
+    [["First", e.a], ["Reply", e.b]].forEach(([t, side]) => { const p = h("div", { class: "mono", style: "cursor:pointer;margin-top:4px" }); p.append(document.createTextNode(t + ": " + side.snippet.before), h("span", { class: "mk" }, side.snippet.match), document.createTextNode(side.snippet.after)); p.addEventListener("click", () => inspectItem(side.item_id)); row.appendChild(p); });
+    row.appendChild(h("div", { class: "note" }, "cues first: " + (e.a_cues.map((c) => CAT_NAMES[c] || c).join(", ") || "none") + " · cues reply: " + (e.b_cues.map((c) => CAT_NAMES[c] || c).join(", ") || "none"))); xc.appendChild(row); });
+  box.appendChild(xc);
+
+  // resource adoption
+  const hc = h("div", { class: "card" }); hc.append(h("div", { style: "font-weight:600" }, "Resource adoption across labels"), h("div", { class: "note" }, hs.definition));
+  hc.appendChild(table([{ label: "Host", code: 1, get: (r) => r.host }, { label: "Labels", get: (r) => fmt(r.labels) }, { label: "First used", get: (r) => r.first_time.slice(0, 16) }, { label: "Others within 24 h", get: (r) => fmt(r.other_labels_within_24h) }, { label: "Revisions", get: (r) => fmt(r.revisions) }], hs.hosts.slice(0, 14)));
+  box.appendChild(hc);
+
+  // arrivals vs usage: how many labels first appeared each week, and how many of them use each cue kind
+  const ca = sm.category_adoption || [], by = {}; ca.forEach((p) => { (by[p.category] = by[p.category] || []).push(p); });
+  const sc = h("div", { class: "card" }); sc.append(h("div", { style: "font-weight:600" }, "Who uses each kind of cue: new labels per week"), h("div", { class: "note" }, "Grey = labels that first appeared that week. Blue = how many of them use that kind of cue at some point. Most labels arrive in one burst, so a tall blue bar in the burst week shows labels arriving already using the language, not the language spreading to existing labels."));
+  const grid = h("div", { style: "display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;margin-top:8px" });
+  Object.entries(by).forEach(([c, pts]) => { const W2 = 230, H2 = 110, ymax = Math.max(...pts.map((p) => p.arrivals)), bw = Math.max(6, Math.min(26, (W2 - 16) / pts.length - 4));
+    const v = s("svg", { viewBox: "0 0 " + W2 + " " + H2, width: "100%", role: "img", "aria-label": (CAT_NAMES[c] || c) + ": new labels per week and how many use it" });
+    v.appendChild(s("text", { x: 8, y: 12, class: "val" }, CAT_NAMES[c] || c));
+    const tot = pts.reduce((a, p) => a + p.arrivals_using_cue, 0), all = pts.reduce((a, p) => a + p.arrivals, 0); v.appendChild(s("text", { x: W2 - 8, y: 12, "text-anchor": "end", class: "muted" }, fmt(tot) + " of " + fmt(all) + " labels"));
+    pts.forEach((p, i) => { const x0 = 8 + i * ((W2 - 16) / pts.length) + 2, hAll = (p.arrivals / ymax) * (H2 - 44), hUse = (p.arrivals_using_cue / ymax) * (H2 - 44), base = H2 - 18;
+      const g = s("g", { tabindex: 0, role: "img", "aria-label": p.bucket.slice(0, 10) + ": " + p.arrivals + " new labels, " + p.arrivals_using_cue + " use it" });
+      g.appendChild(s("rect", { x: x0, y: base - hAll, width: bw, height: Math.max(hAll, 1), fill: "var(--axis)", rx: 3 }));
+      if (hUse > 0) g.appendChild(s("rect", { x: x0, y: base - hUse, width: bw, height: hUse, fill: "var(--s1)", rx: 3 }));
+      hover(g, [["t1", "Week of " + p.bucket.slice(0, 10)], ["t2", fmt(p.arrivals) + " labels first appeared · " + fmt(p.arrivals_using_cue) + " (" + (p.share === null ? "n/a" : pct(p.share)) + ") use this kind of cue · " + fmt(p.arrivals_using_cue_in_first_revision) + " already in their first revision"]]); v.appendChild(g); });
+    v.appendChild(s("text", { x: 8, y: H2 - 4, class: "muted" }, pts[0].bucket.slice(0, 10))); v.appendChild(s("text", { x: W2 - 8, y: H2 - 4, "text-anchor": "end", class: "muted" }, pts[pts.length - 1].bucket.slice(0, 10)));
+    grid.appendChild(v); });
+  sc.appendChild(grid); box.appendChild(sc);
 }
 
 // ---- left pane ----
@@ -234,7 +322,7 @@ async function loadCase(id) {
   hideTip(); const cs = await api("/cases/" + encodeURIComponent(id));
   state.cur = cs; state.selItem = null; state.selEdge = null;
   try { state.reviews = (await api("/cases/" + encodeURIComponent(id) + "/reviews")).reviews; } catch (e) { state.reviews = []; }
-  $("overview").hidden = true; $("case").hidden = false; $("q-card").hidden = false; ["b-md", "b-json", "b-cons"].forEach((x) => { $(x).hidden = false; });
+  showPane("case"); $("q-card").hidden = false; ["b-md", "b-json", "b-cons", "b-links"].forEach((x) => { $(x).hidden = false; });
   [...$("cases").children].forEach((li) => li.classList.toggle("sel", li.dataset.id === id));
   $("c-title").replaceChildren(document.createTextNode(cs.type + ": "), h("code", null, clip(cs.raw, 160)));
   const k = cs.counts; $("c-counts").textContent = fmt(k.full_occurrences) + " occurrences in full text vs " + fmt(k.novel_occurrences) + " in new text; " + fmt(k.novel_items) + " new-text items by " + fmt(k.novel_labels) + " author label(s)." + (cs.appearances.length >= 80 ? " Showing the first 80 appearances." : "");
@@ -249,8 +337,8 @@ const EDGE_NOTE = "Links are undirected: even an exact shared string does not pr
 function legend(el, items) { el.replaceChildren(); items.forEach(([svgNode, t]) => { const sp = h("span"); sp.append(svgNode, document.createTextNode(t)); el.appendChild(sp); }); }
 function renderChart() {
   const c = state.cur, { shown, hidden } = visibleEdges(); const ch = $("chart");
-  const mk = (kind) => { const sv = s("svg", { width: 26, height: 12 }); if (kind === "new") sv.appendChild(s("circle", { cx: 7, cy: 6, r: 5, fill: "var(--s1)" })); else if (kind === "rest") sv.appendChild(s("circle", { cx: 7, cy: 6, r: 4, fill: "none", stroke: "var(--muted)", "stroke-width": 2 })); else sv.appendChild(s("line", { x1: 0, x2: 26, y1: 6, y2: 6, stroke: "var(--ink2)", "stroke-width": 2, "stroke-dasharray": kind === "dash" ? "5 4" : "" })); return sv; };
-  legend($("legend"), c.phrase ? [[mk("new"), "Text containing the phrase"]] : [[mk("new"), "New text"], [mk("rest"), "Restored copy"], [mk("solid"), "Same exact string"]]);
+  const mk = (kind) => { const sv = s("svg", { width: 26, height: 12 }); if (kind === "new") sv.appendChild(s("circle", { cx: 7, cy: 6, r: 5, fill: "var(--s1)" })); else if (kind === "rest") sv.appendChild(s("circle", { cx: 7, cy: 6, r: 4, fill: "none", stroke: "var(--muted)", "stroke-width": 2 })); else if (kind === "ring") { sv.appendChild(s("circle", { cx: 7, cy: 6, r: 5, fill: "none", stroke: "var(--ink)", "stroke-width": 1.5 })); } else sv.appendChild(s("line", { x1: 0, x2: 26, y1: 6, y2: 6, stroke: "var(--ink2)", "stroke-width": 2, "stroke-dasharray": kind === "dash" ? "5 4" : "" })); return sv; };
+  legend($("legend"), c.phrase ? [[mk("new"), "Text containing the phrase"], [mk("ring"), "Earliest recorded appearance"]] : [[mk("new"), "New text"], [mk("rest"), "Restored copy"], [mk("solid"), "Same exact string"], [mk("ring"), "Earliest recorded appearance"]]);
   if (c.phrase) { $("c-note").textContent = "Dots are placed by recorded database time, whose clock uncertainty is not given. " + c.phrase.note; } else
   $("c-note").textContent = EDGE_NOTE + (state.conservative ? " Conservative mode: " + hidden + " link(s) hidden because their order is not established by the source's own sequence." : "") + " Positions use recorded database time, whose clock uncertainty is not given.";
   const apps = c.appearances;
@@ -258,46 +346,86 @@ function renderChart() {
   $("c-table").replaceChildren(table([{ label: "Time", get: (a) => a.time || "unknown" }, { label: "Author label", get: (a) => a.label }, { label: "Kind", get: (a) => a.kind.replace(/_/g, " ") }, { label: "Text", get: (a) => a.novelty.replace(/_/g, " ") }, { label: "Context", code: 1, get: (a) => a.snippet.before.slice(-40) + a.snippet.match + a.snippet.after.slice(0, 40) }], apps));
 }
 function appTime(a) { return a.time ? Date.parse(a.time.replace(" ", "T") + "Z") : null; }
-function dotNode(a, px, py) {
-  const g = s("g", { class: "dot", tabindex: 0, role: "button", "aria-label": a.label + ", " + a.novelty + ", " + (a.time || "no time") }); const rest = a.novelty === "restored";
+const OP = { rest: 0.55, faded: 0.14, dim: 0.04 };
+// Links stay faint until you hover or select an item; then that item's links and neighbours light up.
+function makeFocus(svg, edgeEls, dotEls, edges) {
+  const nbr = {}; edges.forEach((e) => { (nbr[e.src] = nbr[e.src] || new Set()).add(e.dst); (nbr[e.dst] = nbr[e.dst] || new Set()).add(e.src); });
+  const many = edges.length > 12 && state.links !== "all";
+  return (id) => {
+    edgeEls.forEach((g) => { const hit = id && (g.dataset.src === id || g.dataset.dst === id), ln = g.querySelector(".vis");
+      ln.style.opacity = id ? (hit ? 1 : OP.dim) : (many ? OP.faded : OP.rest);
+      ln.style.strokeWidth = hit ? 2.6 : (g.dataset.sel === "1" ? 3 : 1.4); });
+    dotEls.forEach((d) => { const k = d.dataset.id; d.style.opacity = !id || k === id || (nbr[id] && nbr[id].has(k)) ? 1 : 0.3; });
+  };
+}
+function refocus() { const sv = $("chart").querySelector("svg"); if (sv && sv.__focus) sv.__focus(state.selItem); }
+function dotNode(a, px, py, ref) {
+  const g = s("g", { class: "dot", tabindex: 0, role: "button", "data-id": a.item_id, "aria-label": a.label + ", " + a.novelty + ", " + (a.time || "no time") }); const rest = a.novelty === "restored";
   g.appendChild(s("circle", { cx: px, cy: py, r: 12, fill: "transparent", style: "cursor:pointer" }));
   g.appendChild(s("circle", { cx: px, cy: py, r: rest ? 4 : 5, fill: rest ? "var(--surface)" : "var(--s1)", stroke: rest ? "var(--muted)" : "var(--surface)", "stroke-width": 2 }));
   hover(g, [["t1", a.label], ["t2", a.kind.replace(/_/g, " ") + " · " + a.novelty.replace(/_/g, " ") + " · " + (a.time || "no time") + (a.event_index ? " · event " + a.event_index : "")]], a.snippet);
+  const on = () => ref.fn(a.item_id), off = () => ref.fn(state.selItem);
+  g.addEventListener("pointerenter", on); g.addEventListener("pointerleave", off); g.addEventListener("focus", on); g.addEventListener("blur", off);
   g.addEventListener("click", () => inspectItem(a.item_id)); g.addEventListener("keydown", (e) => { if (e.key === "Enter") inspectItem(a.item_id); });
   return g;
 }
-function edgeLine(e, p, q) {
-  const grp = s("g", { class: "edge-hit", tabindex: 0, role: "button", "aria-label": e.relation + " link" });
-  grp.appendChild(s("line", { x1: p.x, y1: p.y, x2: q.x, y2: q.y, stroke: "transparent", "stroke-width": 12 }));
-  const ln = s("line", { x1: p.x, y1: p.y, x2: q.x, y2: q.y, stroke: "var(--ink2)", "stroke-width": state.selEdge === e.src + e.dst ? 3 : 1.5, "stroke-linecap": "round", opacity: 0.8 });
-  if (e.relation === "possible_reuse") ln.setAttribute("stroke-dasharray", "5 4"); grp.appendChild(ln);
-  hover(grp, [["t1", e.relation.replace(/_/g, " ")], ["t2", e.tier.replace(/_/g, " ") + " · order: " + e.temporal.replace(/_/g, " ")]]);
-  grp.addEventListener("click", () => inspectEdge(e)); grp.addEventListener("keydown", (ev) => { if (ev.key === "Enter") inspectEdge(e); });
-  return grp;
+function edgeLine(e, p, q, bend) {
+  const g = s("g", { class: "edge-hit lnk", tabindex: 0, role: "button", "aria-label": e.relation + " link", "data-src": e.src, "data-dst": e.dst, "data-sel": state.selEdge === e.src + e.dst ? "1" : "0" });
+  const d = bend ? "M " + p.x + " " + p.y + " Q " + bend.x + " " + bend.y + " " + q.x + " " + q.y : "M " + p.x + " " + p.y + " L " + q.x + " " + q.y;
+  g.appendChild(s("path", { d, stroke: "transparent", "stroke-width": 12, fill: "none" }));
+  const ln = s("path", { class: "vis", d, stroke: "var(--ink2)", "stroke-width": 1.4, "stroke-linecap": "round", fill: "none" });
+  if (e.relation === "possible_reuse") ln.setAttribute("stroke-dasharray", "5 4"); g.appendChild(ln);
+  hover(g, [["t1", e.relation.replace(/_/g, " ")], ["t2", e.tier.replace(/_/g, " ") + " · order: " + e.temporal.replace(/_/g, " ")]]);
+  g.addEventListener("click", () => inspectEdge(e)); g.addEventListener("keydown", (ev) => { if (ev.key === "Enter") inspectEdge(e); });
+  return g;
 }
+function firstRecorded(apps) { let best = null, bt = Infinity; apps.forEach((a) => { const t = appTime(a); if (t !== null && t < bt) { bt = t; best = a; } }); return best; }
+function firstRing(px, py) { return s("circle", { cx: px, cy: py, r: 9, fill: "none", stroke: "var(--ink)", "stroke-width": 1.5, "pointer-events": "none" }); }
 function renderTimeline(ch, apps, edges) {
   const dated = apps.filter((a) => a.time), order = []; apps.forEach((a) => { if (!order.includes(a.label)) order.push(a.label); });
   const MAXL = 10, lanes = order.slice(0, MAXL); if (order.length > MAXL) lanes.push("other labels (" + (order.length - MAXL) + ")");
   const laneOf = (l) => { const i = lanes.indexOf(l); return i < 0 ? lanes.length - 1 : i; };
-  const W = 860, L = 190, R = 20, LH = 36, top = 10, H = top + lanes.length * LH + 36; const times = dated.map(appTime);
   if (!dated.length) { ch.replaceChildren(h("div", { class: "note" }, "No appearance has a recorded time; see the table view.")); return; }
-  const t0 = Math.min(...times), t1 = Math.max(...times, t0 + 1), x = (t) => L + (t - t0) / (t1 - t0 || 1) * (W - L - R);
+  const W = 860, L = 190, R = 24, LH = 52, top = 12, H = top + lanes.length * LH + 36, times = dated.map(appTime);
+  const sorted = dated.map((a, i) => i).sort((a, b) => times[a] - times[b] || a - b), rankOf = {}; sorted.forEach((k, r) => { rankOf[k] = r; });
+  const t0 = times[sorted[0]], t1 = Math.max(times[sorted[sorted.length - 1]], t0 + 1), span = W - L - R;
+  const x = (k) => state.even ? L + (sorted.length > 1 ? rankOf[k] / (sorted.length - 1) : 0.5) * span : L + (times[k] - t0) / (t1 - t0 || 1) * span;
   const svg = s("svg", { viewBox: "0 0 " + W + " " + H, width: "100%", role: "img", "aria-label": "Appearances by author label over time" });
-  lanes.forEach((l, i) => { const y = top + i * LH + LH / 2; svg.append(s("line", { x1: L, x2: W - R, y1: y, y2: y, stroke: "var(--grid)" }), s("text", { x: L - 10, y: y + 4, "text-anchor": "end" }, clip(l, 28))); });
-  for (let i = 0; i <= 4; i++) { const t = t0 + (t1 - t0) * i / 4, d = new Date(t).toISOString(); svg.appendChild(s("text", { x: x(t), y: H - 10, "text-anchor": i === 0 ? "start" : i === 4 ? "end" : "middle", class: "muted" }, t1 - t0 > 2 * 864e5 ? d.slice(0, 10) : d.slice(0, 16).replace("T", " "))); }
-  const pos = {}; dated.forEach((a, i) => { if (!(a.item_id in pos)) pos[a.item_id] = { x: x(times[i]), y: top + laneOf(a.label) * LH + LH / 2 }; });
-  edges.forEach((e) => { if (pos[e.src] && pos[e.dst]) svg.appendChild(edgeLine(e, pos[e.src], pos[e.dst])); });
-  dated.forEach((a, i) => svg.appendChild(dotNode(a, x(times[i]), top + laneOf(a.label) * LH + LH / 2)));
+  lanes.forEach((l, i) => { const y = top + i * LH + LH / 2; if (i % 2 === 0) svg.appendChild(s("rect", { x: L - 6, y: y - LH / 2, width: W - L - R + 6, height: LH, fill: "var(--grid)", opacity: 0.35, rx: 6 })); svg.append(s("line", { x1: L, x2: W - R, y1: y, y2: y, stroke: "var(--grid)" }), s("text", { x: L - 12, y: y + 4, "text-anchor": "end" }, clip(l, 28))); });
+  const longSpan = t1 - t0 > 2 * 864e5;
+  for (let q = 0; q <= 4; q++) { const k = sorted[Math.round(q / 4 * (sorted.length - 1))], t = state.even ? times[k] : t0 + (t1 - t0) * q / 4, d = new Date(t).toISOString(), xx = state.even ? x(k) : L + q / 4 * span;
+    svg.appendChild(s("text", { x: xx, y: H - 10, "text-anchor": q === 0 ? "start" : q === 4 ? "end" : "middle", class: "muted" }, longSpan ? d.slice(0, 10) : d.slice(0, 16).replace("T", " "))); }
+  // stack dots that would overlap inside a lane so each stays clickable
+  const SLOTS = [0, -11, 11, -22, 22], placed = {}, pos = {};
+  sorted.forEach((k) => { const a = dated[k], ln = laneOf(a.label), px = x(k); placed[ln] = placed[ln] || []; let slot = 0;
+    for (let sl = 0; sl < SLOTS.length; sl++) { if (!placed[ln].some((o) => o.sl === sl && Math.abs(o.x - px) < 12)) { slot = sl; break; } }
+    placed[ln].push({ x: px, sl: slot }); pos[k] = { x: px, y: top + ln * LH + LH / 2 + SLOTS[slot] }; });
+  const where = {}; dated.forEach((a, k) => { if (!(a.item_id in where)) where[a.item_id] = pos[k]; });
+  const edgeEls = [], dotEls = [], ref = { fn: () => {} };
+  edges.forEach((e) => { if (where[e.src] && where[e.dst]) { const g = edgeLine(e, where[e.src], where[e.dst]); edgeEls.push(g); svg.appendChild(g); } });
+  const first = firstRecorded(dated); dated.forEach((a, k) => { const g = dotNode(a, pos[k].x, pos[k].y, ref); dotEls.push(g); svg.appendChild(g); if (a === first) svg.appendChild(firstRing(pos[k].x, pos[k].y)); });
+  ref.fn = makeFocus(svg, edgeEls, dotEls, edges.filter((e) => where[e.src] && where[e.dst])); svg.__focus = ref.fn; ref.fn(state.selItem);
   ch.replaceChildren(svg); const u = apps.length - dated.length; if (u) ch.appendChild(h("div", { class: "note" }, u + " appearance(s) have no recorded time and are not drawn."));
+  if (state.even) ch.appendChild(h("div", { class: "note" }, "Even spacing: dots are equally spaced in recorded order; distances do not show elapsed time."));
 }
 function renderGraph(ch, apps, edges) {
-  const W = 640, H = 640, cx = W / 2, cy = H / 2, R = 250; const seen = []; apps.forEach((a) => { if (!seen.find((b) => b.item_id === a.item_id)) seen.push(a); });
-  const shownNodes = seen.slice(0, 100), n = shownNodes.length || 1, pos = {};
-  shownNodes.forEach((a, i) => { const ang = i / n * 2 * Math.PI - Math.PI / 2; pos[a.item_id] = { x: cx + R * Math.cos(ang), y: cy + R * Math.sin(ang) }; });
-  const svg = s("svg", { viewBox: "0 0 " + W + " " + H, width: "100%", role: "img", "aria-label": "Link graph of appearances, ordered clockwise by recorded time" });
-  edges.forEach((e) => { if (pos[e.src] && pos[e.dst]) svg.appendChild(edgeLine(e, pos[e.src], pos[e.dst])); });
-  shownNodes.forEach((a) => svg.appendChild(dotNode(a, pos[a.item_id].x, pos[a.item_id].y)));
-  ch.replaceChildren(svg); ch.appendChild(h("div", { class: "note" }, "Nodes run clockwise by recorded time (not established action order); at most 100 nodes shown" + (seen.length > 100 ? " (" + (seen.length - 100) + " omitted)." : ".")));
+  // Nodes sit on a circle in one arc per author label (labelled), ordered by recorded time inside each arc.
+  const seen = []; apps.forEach((a) => { if (!seen.find((b) => b.item_id === a.item_id)) seen.push(a); });
+  const nodes = seen.slice(0, 100), groups = [];
+  nodes.forEach((a) => { let g = groups.find((x) => x.label === a.label); if (!g) { g = { label: a.label, items: [] }; groups.push(g); } g.items.push(a); });
+  groups.forEach((g) => g.items.sort((a, b) => (appTime(a) ?? Infinity) - (appTime(b) ?? Infinity)));
+  const W = 780, H = 660, cx = W / 2, cy = H / 2, R = 215, gap = 0.16, step = Math.min((2 * Math.PI - groups.length * gap) / Math.max(nodes.length, 1), 0.3);
+  const svg = s("svg", { viewBox: "0 0 " + W + " " + H, width: "100%", role: "img", "aria-label": "Link graph of appearances grouped by author label" });
+  const pos = {}; let ang = -Math.PI / 2;
+  groups.forEach((g) => { const a0 = ang; g.items.forEach((a) => { pos[a.item_id] = { x: cx + R * Math.cos(ang), y: cy + R * Math.sin(ang) }; ang += step; });
+    const mid = (a0 + ang - step) / 2, lx = cx + (R + 26) * Math.cos(mid), ly = cy + (R + 26) * Math.sin(mid), right = Math.cos(mid) >= 0;
+    svg.appendChild(s("path", { d: "M " + (cx + (R + 12) * Math.cos(a0)) + " " + (cy + (R + 12) * Math.sin(a0)) + " A " + (R + 12) + " " + (R + 12) + " 0 " + ((ang - step - a0) > Math.PI ? 1 : 0) + " 1 " + (cx + (R + 12) * Math.cos(ang - step)) + " " + (cy + (R + 12) * Math.sin(ang - step)), stroke: "var(--axis)", "stroke-width": 2, fill: "none" }));
+    svg.appendChild(s("text", { x: lx, y: ly + 4, "text-anchor": right ? "start" : "end" }, clip(g.label, 22) + " (" + g.items.length + ")")); ang += gap; });
+  const edgeEls = [], dotEls = [], ref = { fn: () => {} }, shown = edges.filter((e) => pos[e.src] && pos[e.dst]);
+  shown.forEach((e) => { const p = pos[e.src], q = pos[e.dst], bend = { x: cx + (p.x + q.x - 2 * cx) * 0.12, y: cy + (p.y + q.y - 2 * cy) * 0.12 }; const g = edgeLine(e, p, q, bend); edgeEls.push(g); svg.appendChild(g); });
+  const first = firstRecorded(nodes); nodes.forEach((a) => { const g = dotNode(a, pos[a.item_id].x, pos[a.item_id].y, ref); dotEls.push(g); svg.appendChild(g); if (a === first) svg.appendChild(firstRing(pos[a.item_id].x, pos[a.item_id].y)); });
+  ref.fn = makeFocus(svg, edgeEls, dotEls, shown); svg.__focus = ref.fn; ref.fn(state.selItem);
+  ch.replaceChildren(svg); ch.appendChild(h("div", { class: "note" }, "One arc per author label, ordered by recorded time inside each arc (not established action order). Hover a dot to light up its links; at most 100 nodes" + (seen.length > 100 ? " (" + (seen.length - 100) + " omitted)." : ".")));
 }
 const STATUS = { supported: "✓ supported", partial: "~ partial", unknown: "? unknown", conflicting: "≠ conflicting" };
 function renderQuestions() {
@@ -311,12 +439,12 @@ function renderQuestions() {
 async function loadPhrase(q) {
   hideTip(); const kindArg = $("incl-mem").checked ? "&kind=memory" : ""; const r = await api("/search/timeline?q=" + encodeURIComponent(q) + kindArg);
   state.cur = { artifact_id: null, type: "text search", raw: q, appearances: r.appearances, edges: [], answers: [], counts: {}, phrase: r };
-  state.selItem = null; state.selEdge = null; state.reviews = []; $("overview").hidden = true; $("case").hidden = false;
+  state.selItem = null; state.selEdge = null; state.reviews = []; showPane("case");
   [...$("cases").children].forEach((li) => li.classList.remove("sel"));
   $("c-title").replaceChildren(document.createTextNode("Text search: "), h("code", null, clip(q, 120)));
   const labels = new Set(r.appearances.map((a) => a.label)).size;
   $("c-counts").textContent = fmt(r.total) + " matching text item(s)" + (r.total > r.shown ? ", showing the first " + r.shown + " by recorded time" : "") + " by " + labels + " author label(s). " + r.note;
-  $("q-card").hidden = true; ["b-md", "b-json", "b-cons"].forEach((id) => { $(id).hidden = true; });
+  $("q-card").hidden = true; ["b-md", "b-json", "b-cons", "b-links"].forEach((id) => { $(id).hidden = true; });
   renderChart(); $("insp").replaceChildren(h("div", { class: "note" }, "Click a dot to read that item."));
 }
 // ---- inspector ----
@@ -327,7 +455,7 @@ async function openFromText(itemId) {
   await loadCase(best.artifact_id); await inspectItem(itemId);
 }
 async function inspectItem(id) {
-  state.selItem = id; const box = $("insp"); box.classList.add("loading");
+  state.selItem = id; refocus(); const box = $("insp"); box.classList.add("loading");
   try {
     const it = await api("/events/" + id); box.replaceChildren(h("div", { style: "font-weight:600" }, it.author_label || it.actor_label_id || "unknown author label"));
     box.append(h("div", { class: "note" }, it.kind.replace(/_/g, " ") + " · " + (it.source_time || "no time") + (it.generated ? " · LLM-generated (secondary)" : "")));
@@ -366,17 +494,23 @@ function inspectEdge(e) {
 }
 
 // ---- controls ----
-function setView(v) { state.view = v; $("v-time").setAttribute("aria-pressed", v === "time"); $("v-graph").setAttribute("aria-pressed", v === "graph"); renderChart(); }
+function setView(v) { state.view = v; $("b-even").hidden = v === "graph"; $("v-time").setAttribute("aria-pressed", v === "time"); $("v-graph").setAttribute("aria-pressed", v === "graph"); renderChart(); }
 $("v-time").addEventListener("click", () => setView("time")); $("v-graph").addEventListener("click", () => setView("graph"));
+$("b-even").addEventListener("click", () => { state.even = !state.even; $("b-even").setAttribute("aria-pressed", state.even); renderChart(); });
+$("b-links").addEventListener("click", () => { state.links = state.links === "all" ? "auto" : "all"; $("b-links").setAttribute("aria-pressed", state.links === "all"); renderChart(); });
 $("b-cons").addEventListener("click", () => { state.conservative = !state.conservative; $("b-cons").setAttribute("aria-pressed", state.conservative); renderChart(); });
 async function exportCase(fmtName) { const r = await api("/cases/" + encodeURIComponent(state.cur.artifact_id) + "/export?format=" + fmtName); const blob = new Blob([r.body], { type: fmtName === "json" ? "application/json" : "text/markdown" }); const a = h("a", { href: URL.createObjectURL(blob), download: "swarmscope-case." + (fmtName === "json" ? "json" : "md") }); document.body.appendChild(a); a.click(); a.remove(); }
 $("b-md").addEventListener("click", () => exportCase("markdown")); $("b-json").addEventListener("click", () => exportCase("json"));
-$("b-home").addEventListener("click", () => { $("case").hidden = true; $("overview").hidden = false; [...$("cases").children].forEach((li) => li.classList.remove("sel")); });
+$("b-home").addEventListener("click", () => { showPane("overview"); [...$("cases").children].forEach((li) => li.classList.remove("sel")); });
 Promise.all([renderOverview(), renderCases()]).then(async () => {
-  const params = new URLSearchParams(location.hash.slice(1)); if (params.get("phrase")) { $("q").value = params.get("phrase"); await loadPhrase(params.get("phrase")); return; }
+  const params = new URLSearchParams(location.hash.slice(1)); if (params.get("tab") === "topics") { showPane("topics"); return; }
+  if (params.get("phrase")) { $("q").value = params.get("phrase"); await loadPhrase(params.get("phrase")); return; }
   if (params.get("text")) return openFromText(params.get("text"));
   const id = params.get("case"); if (!id) return;
-  await loadCase(id); const want = params.get("item"); if (!want) return;
+  await loadCase(id);
+  if (params.get("even") === "1") $("b-even").click();
+  if (params.get("view") === "graph") setView("graph");
+  const want = params.get("item"); if (!want) return;
   const a = want === "@memory" ? state.cur.appearances.find((x) => x.kind === "memory") : { item_id: want };
   if (a) await inspectItem(a.item_id);
 }).catch((e) => { $("cov").textContent = "Could not reach the API: " + e; });

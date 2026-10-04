@@ -16,6 +16,15 @@ uv run python -m backend.analysis.validate         # 8 integrity gates, exits no
 
 Budget about 10 GB for the database (the memory text is 6.8 GB). Nothing here calls the network or an LLM.
 
+### The German message board (collusion.wiki), about 15 seconds
+```powershell
+uv run python -m backend.ingest.wiki --raw data/raw/full-wiki-logs --db data/derived/wiki.duckdb
+uv run python -m backend.analysis.build --db data/derived/wiki.duckdb
+uv run python -m backend.analysis.validate --db data/derived/wiki.duckdb --raw data/raw/full-wiki-logs
+```
+Each dataset gets its own database file (a loader wipes the database it is given). Point any later step at a dataset
+with `--db`, or the app with `$env:SWARMSCOPE_DB = "data/derived/wiki.duckdb"`.
+
 ## 2. Look at the results
 
 | You want | Run | Output |
@@ -34,7 +43,7 @@ or review step, and start it again afterwards.
 - **Centre: the case.** A timeline with one lane per author label (dots = appearances, lines = links) or a clockwise
   graph. Filled dots are new text; hollow dots are restored copies. Solid lines are the same exact string; dashed
   lines are similar-wording candidates. **Conservative mode** keeps only links whose order the source's own sequence
-  establishes and shows how many were hidden. Below it: the 10 investigation questions, each with status, citations and limitations.
+  establishes and shows how many were hidden. Below it: the 8 investigation questions, each with status, citations and limitations.
 - **Right: inspector.** Click a dot to read the item. Memories and session goals show every line tagged *carried*,
   *new*, *edited*, *restored* or *first seen*, with the artifact highlighted. Click a link to see its evidence tier,
   ordering strength and competing explanations, and to record a review (accept / reject / uncertain, append-only).
@@ -88,3 +97,30 @@ numbers even if that is missed.
   appearances and the graph to 100 nodes.
 - Not loaded: `computer_use_turns`, `claude_code_*` and screenshots, so there is no `observed_use`.
 - A Node/React frontend (the brief's stack) is not built yet; this is a dependency-free page served by the API.
+
+## 8a. Topics, cues and coordination traces (wiki)
+`build` also runs `cues` (lexicon hits in new text, `config/lexicon.toml`) and `references` (wiki links, wiki URLs, label names). The app's **Topics & traces** tab shows a topic x cue heatmap (click a cell for examples), explicit traces per topic, mutual-naming exchanges with their text, resource adoption, and arrivals vs usage per cue. Each case also answers *What are labels doing with it?*, *Which topics?*, *How quickly did it reach other labels?* and *Which later appearances explicitly reference earlier material?*. `uv run python -m backend.analysis.traces --db data/derived/wiki.duckdb` writes the tables to `data/derived/experiments/`; results and caveats are in `docs/EXPERIMENTS.md`.
+
+## 8. Chart controls (case view)
+- **Timeline**: one lane per author label, dots stacked so none overlap; links stay faint until you hover or select a dot,
+  then that dot's links and neighbours light up. The ring marks the earliest recorded appearance. **Even spacing**
+  spaces dots equally in recorded order (use it when events cluster; it hides elapsed time and says so). **All links
+  bold** turns the fading off.
+- **Graph**: one labelled arc per author label, ordered by recorded time inside the arc, with curved links; hover to
+  highlight. At most 100 nodes.
+- A plain text search with no artifact in it plots every hit for the phrase by author label with no links.
+
+## 9. Running on a new dataset
+The stages after ingest only read `snapshot`, `actor_label`, `event` and `text_item`, so a new source needs an adapter plus tests:
+1. Profile the files (`backend.ingest.profile`) and write down which conventions you verified (encodings, offsets, ids, clocks).
+2. Write `backend/ingest/<source>.py` that fills those four tables. Prefix every id with a source namespace; leave an
+   unknown author as NULL; keep source times verbatim and leave time bounds NULL unless the source defines its uncertainty.
+   Give text that carries earlier text forward a `stream_key`; if the source has explicit revision bases set `stream_seq`,
+   `base_item_id` and `base_note` (`explicit`, `page_created` or `incomplete`), otherwise the predecessor is inferred from
+   recorded time. Mark LLM-written text `generated`. Keep a source hash in `source_sha256`/`source_encoding` if there is one.
+3. Add a small synthetic fixture and tests (see `tests/synth_wiki.py`, `tests/test_wiki.py`), including a corruption test
+   proving the validator fails when it should.
+4. Load into its own database, run `backend.analysis.build`, then `backend.analysis.validate`. Add source-specific raw-file
+   checks to the adapter (the wiki's `validate_raw`) and register them in `validate.run`.
+5. Add display names to `backend/display.py`, then generate the report/app against the new database.
+Not generalized yet: matching the same artifact *across* datasets (each database is separate).

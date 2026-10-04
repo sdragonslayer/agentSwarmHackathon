@@ -11,10 +11,11 @@ import duckdb
 
 QUESTIONS_VERSION = "questions-0.1"
 NOVEL_SQL = "a.novelty IN ('standalone', 'first_observed', 'new', 'modified')"
-SCOPE_NOTE = (
-    "Scope is the loaded AI Village text tables only; computer_use_turns, claude_code_* and screenshots are not "
-    "loaded, and the release has gaps in event_index."
-)
+
+
+def scope_note(con: duckdb.DuckDBPyConnection) -> str:
+    row = con.execute("SELECT source, coverage_notes FROM snapshot LIMIT 1").fetchone()
+    return f"Scope is the loaded {row[0]} tables only. {row[1]}" if row else "Scope is the loaded tables only."
 
 
 def _cite(row: dict) -> dict:
@@ -23,11 +24,12 @@ def _cite(row: dict) -> dict:
 
 def _appearances(con: duckdb.DuckDBPyConnection, artifact_id: str, novel_only: bool = True) -> list[dict]:
     cols = ["item_id", "event_id", "actor_label_id", "kind", "time_ts", "event_index", "span_start", "span_end",
-            "snippet", "novelty", "display_name"]
+            "snippet", "novelty", "display_name", "line_no", "stream_key"]
     rows = con.execute(
         f"""
         SELECT a.item_id, a.event_id, a.actor_label_id, t.kind, a.time_ts, e.event_index, a.span_start, a.span_end,
-               substr(t.text, a.span_start + 1, a.span_end - a.span_start) AS snippet, a.novelty, l.display_name
+               substr(t.text, a.span_start + 1, a.span_end - a.span_start) AS snippet, a.novelty, l.display_name,
+               a.line_no, t.stream_key
         FROM appearance a JOIN text_item t USING (item_id)
         LEFT JOIN event e ON e.event_id = a.event_id LEFT JOIN actor_label l ON l.label_id = a.actor_label_id
         WHERE a.artifact_id = ? {"AND " + NOVEL_SQL if novel_only else ""}
@@ -53,12 +55,13 @@ def answer_all(con: duckdb.DuckDBPyConnection, artifact_id: str) -> list[dict]:
     ).fetchone()
     full_occ, novel_occ, _, novel_items, novel_labels = counts
     novel = _appearances(con, artifact_id)
+    scope = scope_note(con)
     out: list[dict] = []
 
     def add(qid, question, claim, status, citations=(), limitations=()):
         out.append({
             "id": qid, "question": question, "claim": claim, "status": status,
-            "citations": [_cite(c) for c in citations], "limitations": [SCOPE_NOTE, *limitations],
+            "citations": [_cite(c) for c in citations], "limitations": [scope, *limitations],
         })
 
     # 1. earliest appearance
@@ -93,10 +96,144 @@ def answer_all(con: duckdb.DuckDBPyConnection, artifact_id: str) -> list[dict]:
     else:
         add("introducers", "Which author labels introduced new material?", "No data.", "unknown")
 
-    # 3-4. references and resemblance
-    add("references", "Which later appearances explicitly reference earlier material?",
-        "No detector for resolvable references between items is implemented, so no reference edges are claimed.",
-        "unknown", [], ["Absence of reference edges is not evidence that none exist."])
+    # topics the artifact is discussed under (the source's own page classification)
+    fam = con.execute(
+        "SELECT m.value, count(DISTINCT a.item_id), count(DISTINCT a.actor_label_id) FROM appearance a "
+        "JOIN text_item t USING (item_id) JOIN stream_meta m ON m.stream_key = t.stream_key AND m.key = 'page_family' "
+        f"WHERE a.artifact_id = ? AND {NOVEL_SQL} GROUP BY 1 ORDER BY 2 DESC",
+        [artifact_id],
+    ).fetchall()
+    if fam:
+        top = "; ".join(f"{v} ({n} revisions, {lab} labels)" for v, n, lab in fam[:6])
+        add("topics", "Which topics is it discussed under?", f"Pages carrying it fall in {len(fam)} topic group(s): {top}.",
+            "supported", [], [("Topic groups are the source's own page classification with its stated method and confidence; "
+                               "they are not verified here.")])
+
+    # what labels are doing in the lines where it appears (lexicon cues, not verdicts)
+    n_cues = con.execute("SELECT count(*) FROM cue_hit").fetchone()[0]
+    if n_cues == 0:
+        add("activity", "What are labels doing with it?", "Cue analysis has not been run on this database.", "unknown", [],
+            ["Run `backend.analysis.build --steps cues` to enable it."])
+    else:
+        cues = con.execute(
+            f"""
+            SELECT h.category, count(*) AS hits, count(DISTINCT a.item_id) AS items, count(DISTINCT a.actor_label_id) AS labels
+            FROM appearance a JOIN cue_hit h ON h.item_id = a.item_id AND h.line_no = a.line_no
+            WHERE a.artifact_id = ? AND {NOVEL_SQL} GROUP BY 1 ORDER BY 3 DESC, 2 DESC
+            """,
+            [artifact_id],
+        ).fetchall()
+        if not cues:
+            # weaker evidence: cue words elsewhere in the new text of the same revisions
+            wider = con.execute(
+                f"""
+                SELECT h.category, count(DISTINCT a.item_id), count(DISTINCT a.actor_label_id)
+                FROM appearance a JOIN cue_hit h ON h.item_id = a.item_id
+                WHERE a.artifact_id = ? AND {NOVEL_SQL} GROUP BY 1 ORDER BY 2 DESC
+                """,
+                [artifact_id],
+            ).fetchall()
+            n_items = con.execute(
+                f"SELECT count(DISTINCT a.item_id) FROM appearance a WHERE a.artifact_id = ? AND {NOVEL_SQL}", [artifact_id]
+            ).fetchone()[0]
+            if wider:
+                parts = "; ".join(f"{c.replace('_', ' ')}: {n} revision(s)" for c, n, _ in wider[:5])
+                add("activity", "What are labels doing with it?",
+                    f"No cue word on the same line, but elsewhere in the new text of the {n_items} revision(s) that contain it: "
+                    f"{parts}.", "partial", [],
+                    ["This is weaker: the cue words are on other lines of the same revision and may be about something else.",
+                     "Cues are matched words (config/lexicon.toml), not verdicts."])
+            else:
+                add("activity", "What are labels doing with it?",
+                    "None of the lexicon cue words appear in the new text of the revisions where it is written.", "partial", [],
+                    ["The lexicon is a fixed word list (config/lexicon.toml): no hit does not mean no activity."])
+        else:
+            parts = "; ".join(f"{c.replace('_', ' ')}: {n} revision(s) by {lab} label(s)" for c, _, n, lab in cues[:6])
+            cites = []
+            for c, *_ in cues[:4]:
+                row = con.execute(
+                    f"""
+                    SELECT h.item_id, t.event_id, h.span_start, h.span_end, substr(t.text, h.span_start + 1, h.span_end - h.span_start)
+                    FROM appearance a JOIN cue_hit h ON h.item_id = a.item_id AND h.line_no = a.line_no
+                    JOIN text_item t ON t.item_id = h.item_id WHERE a.artifact_id = ? AND {NOVEL_SQL} AND h.category = ?
+                    ORDER BY t.time_ts NULLS LAST, h.item_id LIMIT 1
+                    """,
+                    [artifact_id, c],
+                ).fetchone()
+                if row:
+                    cites.append({"item_id": row[0], "event_id": row[1], "span_start": row[2], "span_end": row[3],
+                                  "snippet": row[4]})
+            out.append({
+                "id": "activity", "question": "What are labels doing with it?",
+                "claim": f"Cue words on the lines where it is written: {parts}.", "status": "supported",
+                "citations": cites,
+                "limitations": [scope, ("Cues are matched words (config/lexicon.toml), not verdicts: 'answer' or 'proxy' on a "
+                                 "line does not show what the author did or whether it worked.")],
+            })
+
+    # how fast it reached other labels
+    firsts = {}
+    for a in novel:
+        if a["actor_label_id"] and a["actor_label_id"] not in firsts:
+            firsts[a["actor_label_id"]] = a
+    ordered = sorted(firsts.values(), key=lambda a: (a["time_ts"] is None, a["time_ts"]))
+    if len(ordered) >= 2 and ordered[0]["time_ts"] is not None:
+        t0 = ordered[0]["time_ts"]
+        gaps = [(_label(a), (a["time_ts"] - t0).total_seconds()) for a in ordered[1:6] if a["time_ts"] is not None]
+
+        def fmt(sec):
+            return f"{sec / 3600:.1f} h" if sec >= 7200 else f"{sec / 60:.1f} min" if sec >= 120 else f"{sec:.0f} s"
+
+        text = "; ".join(f"{lab} after {fmt(sec)}" for lab, sec in gaps)
+        add("spread", "How quickly did it reach other labels?",
+            f"First written by {_label(ordered[0])}; next author labels: {text}. {len(ordered)} label(s) in total.",
+            "supported", ordered[:4],
+            ["Gaps use recorded time, whose uncertainty the source does not give, so the order of close events is not established.",
+             "Reaching a second label shows the string was written again, not that it was read from the first."])
+    elif novel:
+        add("spread", "How quickly did it reach other labels?",
+            "Only one author label wrote it in new text, so there is no spread to measure.", "supported", [], [])
+
+    # explicit references from later appearances to earlier appearances' pages or authors
+    n_refs = con.execute("SELECT count(*) FROM reference").fetchone()[0]
+    if n_refs == 0:
+        add("references", "Which later appearances explicitly reference earlier material?",
+            "Reference analysis has not been run on this database.", "unknown", [],
+            ["Run `backend.analysis.build --steps references` to enable it."])
+    elif novel:
+        first_item = novel[0]["item_id"]
+        earlier_labels = {a["actor_label_id"] for a in novel if a["actor_label_id"]}
+        earlier_streams = {a["stream_key"] for a in novel if a["stream_key"]}
+        later = [a["item_id"] for a in novel if a["item_id"] != first_item]
+        found = []
+        if later:
+            found = con.execute(
+                """
+                SELECT r.item_id, t.event_id, r.span_start, r.span_end,
+                       substr(t.text, r.span_start + 1, r.span_end - r.span_start), r.ref_type, r.target_text
+                FROM reference r JOIN text_item t USING (item_id)
+                WHERE r.resolved AND r.item_id IN (SELECT unnest(?::VARCHAR[]))
+                  AND ((r.target_kind = 'label' AND r.target_id IN (SELECT unnest(?::VARCHAR[])))
+                    OR (r.target_kind = 'page' AND r.target_id IN (SELECT unnest(?::VARCHAR[]))))
+                ORDER BY t.time_ts NULLS LAST, r.item_id LIMIT 200
+                """,
+                [later, sorted(earlier_labels), sorted(earlier_streams)],
+            ).fetchall()
+        lim = ["Only exact names and links are detected (page and label names that look like handles, wiki links, wiki URLs).",
+               "A reference shows the writer knew of the target; it does not show they read it or acted on it.",
+               "No hit does not mean no communication."]
+        if found:
+            items = {r[0] for r in found}
+            kinds = sorted({r[5] for r in found})
+            add("references", "Which later appearances explicitly reference earlier material?",
+                f"{len(items)} later revision(s) containing it also explicitly name or link a label or page that already "
+                f"wrote it ({', '.join(kinds)}).", "supported",
+                [{"item_id": r[0], "event_id": r[1], "span_start": r[2], "span_end": r[3], "snippet": r[4]} for r in found[:6]],
+                lim)
+        else:
+            add("references", "Which later appearances explicitly reference earlier material?",
+                "No later revision containing it explicitly names or links an earlier author label or page.", "partial", [], lim)
+
     sim = con.execute(
         "SELECT count(*) FROM evidence_edge WHERE artifact_id = ? AND relation = 'possible_reuse'", [artifact_id]
     ).fetchone()[0]
@@ -118,13 +255,7 @@ def answer_all(con: duckdb.DuckDBPyConnection, artifact_id: str) -> list[dict]:
         "Only one surface form appears and no edited lines contain it.",
         "partial" if variants > 1 or modified else "supported", [], ["Only the identifier is compared, not the surrounding claim."])
 
-    # 6-8. claims, observation, warnings: not answerable deterministically here
-    add("claimed_use", "Did anyone claim to use the information?",
-        "Claim detection is not run in the deterministic mode; no self-report is asserted.", "unknown", [],
-        ["A self-report would be labeled as such: it does not establish that use happened or succeeded."])
-    add("observed_use", "Is use or success independently observed?",
-        "Not established: the action/turn tables that could show use are not loaded.", "unknown", [],
-        ["Do not infer use from the text appearing in memory or chat."])
+    # warnings and corrections are not detected deterministically: abstain
     add("warnings", "Were there warnings or corrections?",
         "No correction detector is run in the deterministic mode.", "unknown", [],
         ["A missing recorded response is not proof a warning was ignored; per-agent read logs are absent."])
@@ -140,15 +271,20 @@ def answer_all(con: duckdb.DuckDBPyConnection, artifact_id: str) -> list[dict]:
     add("alternatives", "What competing explanation fits?", "; ".join(expl) + ".", "partial", [],
         ["These are generic alternatives; none is ruled out by the data."])
 
-    # 10. what cannot be reconstructed
+    # what cannot be reconstructed
     gaps = con.execute(
-        "SELECT count(*) FROM (SELECT event_index - lag(event_index) OVER (ORDER BY event_index) AS d FROM event) "
-        "WHERE d > 1"
+        "SELECT count(*) FROM (SELECT event_index - lag(event_index) OVER (ORDER BY event_index) AS d FROM event "
+        "WHERE event_index IS NOT NULL) WHERE d > 1"
     ).fetchone()[0]
-    add("unreconstructable", "What cannot be reconstructed?",
-        f"event_index has {gaps} gaps (events missing from the release); {unknown_n} appearance(s) have no author "
-        "label; model tool-call output and screenshots are not loaded; no read logs show who saw what.",
-        "supported", [], [])
+    incomplete = con.execute("SELECT count(*) FROM lineage_summary WHERE lineage_status = 'first_in_stream'").fetchone()[0]
+    parts = []
+    if gaps:
+        parts.append(f"event_index has {gaps} gaps (events missing from the release)")
+    if incomplete:
+        parts.append(f"{incomplete} text stream(s) start with incomplete lineage (earlier versions are not in the release)")
+    parts.append(f"{unknown_n} appearance(s) have no author label")
+    parts.append("no read logs show who saw what")
+    add("unreconstructable", "What cannot be reconstructed?", "; ".join(parts) + ".", "supported", [], [])
     return out
 
 

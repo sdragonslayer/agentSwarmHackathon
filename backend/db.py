@@ -84,7 +84,12 @@ CREATE TABLE IF NOT EXISTS text_item (
     stream_key VARCHAR,                    -- items in the same stream carry text forward (lineage)
     source_file VARCHAR,
     source_table VARCHAR,
-    source_id VARCHAR
+    source_id VARCHAR,
+    stream_seq BIGINT,                     -- explicit order inside a stream (e.g. revision seq); NULL = use time
+    base_item_id VARCHAR,                  -- explicit base from the source (e.g. diff_base); NULL = none given
+    base_note VARCHAR,                     -- explicit | page_created | incomplete | NULL (infer from stream order)
+    source_sha256 VARCHAR,                 -- hash the source declared for this text, if any
+    source_encoding VARCHAR                -- encoding the source hash was computed over, if any
 );
 
 -- Derived: non-inherited spans of items that sit in a lineage stream.
@@ -103,13 +108,57 @@ CREATE TABLE IF NOT EXISTS lineage_summary (
     item_id VARCHAR PRIMARY KEY,
     stream_key VARCHAR NOT NULL,
     base_item_id VARCHAR,
-    lineage_status VARCHAR NOT NULL,       -- first_in_stream (incomplete lineage) | inferred_predecessor
+    lineage_status VARCHAR NOT NULL,       -- first_in_stream (incomplete) | page_created | inferred_predecessor | explicit_base
     n_lines INTEGER NOT NULL,
     n_inherited INTEGER NOT NULL,
     n_new INTEGER NOT NULL,
     n_modified INTEGER NOT NULL,
     n_restored INTEGER NOT NULL,
     n_first_observed INTEGER NOT NULL,
+    detector_version VARCHAR NOT NULL
+);
+
+-- Source-provided attributes of a text stream (e.g. the wiki's page_family). Secondary evidence: the source's own
+-- classification, with its stated confidence/method kept as separate keys.
+CREATE TABLE IF NOT EXISTS stream_meta (
+    stream_key VARCHAR NOT NULL,
+    key VARCHAR NOT NULL,
+    value VARCHAR,
+    source_file VARCHAR
+);
+
+-- Derived: lexicon cue hits in non-inherited text. A cue, never a verdict. Spans index into text_item.text.
+CREATE TABLE IF NOT EXISTS cue_hit (
+    item_id VARCHAR NOT NULL,
+    line_no INTEGER NOT NULL,
+    category VARCHAR NOT NULL,
+    term VARCHAR NOT NULL,
+    span_start INTEGER NOT NULL,
+    span_end INTEGER NOT NULL,
+    detector_version VARCHAR NOT NULL
+);
+
+-- Derived: explicit, resolvable pointers in non-inherited text (wiki links/URLs, a label naming another label).
+CREATE TABLE IF NOT EXISTS reference (
+    item_id VARCHAR NOT NULL,
+    line_no INTEGER NOT NULL,
+    ref_type VARCHAR NOT NULL,             -- wikilink | wiki_url | label_mention | page_mention
+    target_kind VARCHAR NOT NULL,          -- page | label
+    target_id VARCHAR,                     -- stream_key or label_id; NULL when unknown/ambiguous
+    target_text VARCHAR NOT NULL,
+    span_start INTEGER NOT NULL,
+    span_end INTEGER NOT NULL,
+    resolved BOOLEAN NOT NULL,
+    detector_version VARCHAR NOT NULL
+);
+
+-- Derived: label A names label B, and B names A in a later revision within the window. Mutual naming, not a conversation.
+CREATE TABLE IF NOT EXISTS exchange (
+    a_item_id VARCHAR NOT NULL,
+    b_item_id VARCHAR NOT NULL,
+    a_label_id VARCHAR NOT NULL,
+    b_label_id VARCHAR NOT NULL,
+    seconds BIGINT NOT NULL,
     detector_version VARCHAR NOT NULL
 );
 
@@ -182,7 +231,21 @@ def connect(path: str | Path = DEFAULT_DB, *, read_only: bool = False) -> duckdb
     con.execute("SET max_temp_directory_size = '4GB'")
     if not read_only:
         con.execute(SCHEMA)
+        for col, typ in TEXT_ITEM_ADDED_COLUMNS:  # databases built before these columns existed
+            con.execute(f"ALTER TABLE text_item ADD COLUMN IF NOT EXISTS {col} {typ}")
     return con
+
+
+TEXT_ITEM_ADDED_COLUMNS = [("stream_seq", "BIGINT"), ("base_item_id", "VARCHAR"), ("base_note", "VARCHAR"),
+                           ("source_sha256", "VARCHAR"), ("source_encoding", "VARCHAR")]
+ALL_TABLES = ("review", "exchange", "reference", "cue_hit", "stream_meta", "evidence_edge", "artifact_counts", "appearance", "artifact", "lineage_summary", "text_change",
+              "text_item", "event", "actor_label_name", "actor_label", "snapshot")
+
+
+def clear_all(con: duckdb.DuckDBPyConnection) -> None:
+    """Empty every table. Loaders call this, so give each dataset its own database file."""
+    for t in ALL_TABLES:
+        con.execute(f"DELETE FROM {t}")
 
 
 def reset_derived(con: duckdb.DuckDBPyConnection, *tables: str) -> None:

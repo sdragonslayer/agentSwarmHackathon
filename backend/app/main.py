@@ -17,8 +17,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from backend.analysis import export_case, inflation, questions, report
+from backend.analysis import export_case, inflation, questions, report, topics, traces
 from backend.db import DEFAULT_DB, connect
+from backend.display import source_label
 
 MAX_GRAPH_NODES = 100
 MAX_ITEM_LINES = 600
@@ -224,12 +225,54 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
 
     cache: dict[str, list] = {}
 
+    def cues_built(con) -> bool:
+        return con.execute("SELECT count(*) FROM cue_hit").fetchone()[0] > 0
+
+
+    @app.get("/topics/matrix")
+    def topics_matrix():
+        con = db()
+        if not cues_built(con):
+            return {"available": False, "note": "Run `backend.analysis.build --steps cues references` for this database."}
+        return {"available": True, **topics.matrix(con, 16), "caveat": traces.caveat(con)}
+
+    @app.get("/topics/examples")
+    def topics_examples(topic: str, category: str, limit: int = Query(12, le=50)):
+        return {"examples": topics.examples(db(), topic, category, limit)}
+
+    @app.get("/traces/summary")
+    def traces_summary():
+        con = db()
+        if not cues_built(con):
+            return {"available": False}
+        return {"available": True, "topics": traces.topic_summary(con)[:20], "answer_provenance": traces.answer_provenance(con),
+                "category_adoption": traces.category_adoption(con), "caveat": traces.caveat(con),
+                "arrival_burst": traces.arrival_burst(con)}
+
+    @app.get("/traces/exchanges")
+    def traces_exchanges(limit: int = Query(20, le=100)):
+        con = db()
+        return {"exchanges": traces.exchanges(con, limit) if cues_built(con) else [],
+                "definition": "Label A names label B in a revision and B names A in a later revision within the window. "
+                              "Mutual naming is a recorded sequence, not proof of a conversation."}
+
+    @app.get("/traces/hosts")
+    def traces_hosts(min_labels: int = Query(10, ge=2)):
+        con = db()
+        return {"hosts": traces.host_adoption(con, min_labels)[:40] if cues_built(con) else [],
+                "definition": "Per web host: labels using it and how many other labels used it within 24 h of the first use. "
+                              "A resource count, not a link between labels."}
+
     @app.get("/stats")
     def stats():
         con = db()
         counts = {t: con.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
                   for t in ("event", "text_item", "actor_label", "artifact", "appearance", "evidence_edge")}
-        return {"scope": counts, "inflation": inflation.headline(con, top=12)}
+        snap = con.execute("SELECT source, coverage_notes FROM snapshot").fetchone()
+        generated = con.execute("SELECT count(*) FROM text_item WHERE generated").fetchone()[0]
+        kinds = [r[0] for r in con.execute("SELECT DISTINCT kind FROM text_item ORDER BY 1").fetchall()]
+        return {"scope": counts, "inflation": inflation.headline(con, top=12), "source_label": source_label(snap[0]),
+                "coverage_notes": snap[1], "generated_items": generated, "text_kinds": kinds}
 
     @app.get("/cases")
     def list_cases():

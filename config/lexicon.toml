@@ -1,0 +1,47 @@
+# Activity cue lexicon for backend.analysis.topics. Editable: change terms, rebuild with
+#   uv run python -m backend.analysis.build --db <db> --steps cues
+#
+# A hit is a CUE that a line is about something, never a verdict that an agent did it. Matching is case-insensitive on
+# word boundaries; a trailing `*` matches any word ending (relay* -> relay, relays, relayed). URLs are masked first.
+# Terms were chosen from the real vocabulary of the German message board (new text only, ranked by how many distinct
+# labels use them) plus the researchers' own description (sharing answers, researching the environment, bypassing
+# restrictions). English and German terms are mixed on purpose because the corpus is.
+
+[meta]
+version = "lexicon-1"
+
+[categories.answer_sharing]
+description = "Posting or asking for answers / results of the task questions"
+terms = ["answer", "answers", "answered", "antwort*", "known answers", "exact value*", "final answer", "correct", "solution*", "lösung*", "ergebnis*"]
+
+[categories.request_relay]
+description = "Asking another party to pass information along or to post something"
+terms = ["relay*", "please post", "please report", "please share", "please send", "please answer", "please append", "urgent*", "asap", "cross-ping", "ping", "anyone", "do you have", "can you", "bitte"]
+
+[categories.timing_sync]
+description = "Round timing and clock synchronisation of the timed multi-round task"
+terms = ["arrived", "deadline*", "cooldown*", "timer*", "countdown", "task clock", "scaffold clock", "cohort*", "tier", "slow-tier", "fast-tier", "synchroni*", "cadence", "due"]
+
+[categories.bypass_circumvention]
+description = "Working around access limits: proxies, mirrors, bypass tricks, blocked resources"
+terms = ["bypass*", "workaround*", "circumvent*", "proxy", "proxies", "mirror", "mirrors", "cors", "no_proxy", "unblock*", "blocked", "restriction*", "restricted", "forbidden", "denied", "firewall", "umgehen", "gesperrt", "blockiert"]
+
+[categories.environment_research]
+description = "Describing or probing the agent's own environment: scaffold, container, tools, limits"
+terms = ["scaffold*", "container*", "terminal*", "sandbox*", "system prompt", "tool", "tools", "environment", "network", "internet", "egress", "allowlist", "whitelist", "rate limit*", "monitored", "docker", "shell", "robots"]
+
+[categories.data_access]
+description = "Getting at the underlying data: caches, full tables, raw feeds, APIs, queries"
+terms = ["cache", "cached", "caching", "full table", "full-table", "all-state", "sdmx", "querydata", "api", "endpoint*", "download*", "raw"]
+
+[categories.probing_testing]
+description = "Tests, probes and markers left to check that something works"
+terms = ["test", "tests", "testing", "probe", "probing", "marker*", "safe to ignore", "curl", "link check", "can you see", "does this work", "temporary", "trial"]
+
+[categories.confirmation]
+description = "Confirming or cross-checking a claim"
+terms = ["confirmed", "verified", "cross-check*", "independently", "reproduced", "replicated"]
+
+[categories.self_identification]
+description = "How the author describes itself"
+terms = ["openai", "oai", "chatgpt", "gpt", "autonomous", "language model", "ai agent"]

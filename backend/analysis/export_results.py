@@ -18,13 +18,22 @@ from backend.analysis import inflation
 from backend.db import DEFAULT_DB, connect
 
 # Demo cases chosen by hand from the real data (see docs/DEMO.md): artifact strings, resolved to ids at run time.
-DEMO_CASES = {
-    "docs_link_typo": "https://docs.google.com/document/d/1y5GGAIthIP_N-4D5nxO-caPYTi7OrL-edit",
-    "chronicle_pr3": "https://github.com/ai-village-agents/village-chronicle/pull/3",
-    "chronicle_commit": "https://github.com/ai-village-agents/village-chronicle/commit/4078515",
-    "carryover": "https://animal-welfare-site-64148b.gitlab.io/guides.html",
-    "shared_resource": "https://github.com/ai-village-agents/basecamp",
+DEMO_CASES_BY_SOURCE = {
+    "aivillage": {
+        "docs_link_typo": "https://docs.google.com/document/d/1y5GGAIthIP_N-4D5nxO-caPYTi7OrL-edit",
+        "chronicle_pr3": "https://github.com/ai-village-agents/village-chronicle/pull/3",
+        "chronicle_commit": "https://github.com/ai-village-agents/village-chronicle/commit/4078515",
+        "carryover": "https://animal-welfare-site-64148b.gitlab.io/guides.html",
+        "shared_resource": "https://github.com/ai-village-agents/basecamp",
+    },
+    "wiki": {
+        "proxy_workaround": "https://www.proxymule.com/__PROXY__/https/www.sec.gov/files/county.json",
+        "direct_variant_list": "https://www.sec.gov/files/county.json?a=.txt",
+        "carryover": ("https://jqp.vercel.app/api/v0?jq=%7Bmethod%3A.regCF_county_methodology%2Cdata%3A%5B."
+                      "regCF_county_2019%5B%5D%7C"),
+    },
 }
+DEMO_CASES: dict[str, str] | None = None  # tests may override; otherwise chosen by the database's source
 
 
 def _write_csv(path: Path, header: list[str], rows: list[tuple]) -> None:
@@ -75,11 +84,13 @@ def export(con: duckdb.DuckDBPyConnection, out: Path) -> dict:
     ).fetchall()
     _write_csv(out / "appearances_by_kind_and_novelty.csv", ["text_kind", "novelty", "appearances"], kinds)
     demo = {}
-    for name, raw in DEMO_CASES.items():
+    source = con.execute("SELECT source FROM snapshot LIMIT 1").fetchone()[0]
+    for name, raw in (DEMO_CASES if DEMO_CASES is not None else DEMO_CASES_BY_SOURCE.get(source, {})).items():
         row = con.execute(
             "SELECT a.artifact_id, c.full_occurrences, c.novel_occurrences, c.novel_items, c.novel_labels "
-            "FROM artifact a JOIN artifact_counts c USING (artifact_id) WHERE a.artifact_type = 'url' AND a.raw = ?",
-            [raw],
+            "FROM artifact a JOIN artifact_counts c USING (artifact_id) WHERE a.artifact_type = 'url' "
+            "AND a.raw LIKE ? || '%'",
+            [raw[:90]],
         ).fetchone()
         demo[name] = ({"artifact_id": row[0], "artifact": raw, "full_occurrences": row[1], "novel_occurrences": row[2],
                        "novel_items": row[3], "novel_labels": row[4]} if row else {"artifact": raw, "missing": True})

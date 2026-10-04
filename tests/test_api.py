@@ -95,3 +95,39 @@ def test_search_timeline_plots_phrase_hits_without_links(tmp_path):
     first = r["appearances"][0]
     assert first["snippet"]["match"].lower() == "workaround" and first["novelty"] == "standalone"
     assert c.get("/search/timeline", params={"q": "zzzz-no-such-phrase"}).json()["total"] == 0
+
+
+def test_topics_and_traces_endpoints(tmp_path):
+    from backend.analysis import references, topics
+    from backend.ingest import wiki
+    from tests import synth_exchange
+
+    raw = tmp_path / "raw"
+    synth_exchange.build(raw)
+    db = tmp_path / "x.duckdb"
+    wiki.load(raw, db)
+    con = connect(db)
+    lineage.build(con)
+    artifacts.build(con)
+    edges.build(con)
+    topics.build(con)
+    references.build(con)
+    con.close()
+    c = TestClient(create_app(db))
+    m = c.get("/topics/matrix").json()
+    assert m["available"] and "datausa-test" in [t["topic"] for t in m["topics"]] and "not verdicts" in m["caveat"]
+    ex = c.get("/topics/examples", params={"topic": "datausa-test", "category": "answer_sharing"}).json()["examples"]
+    assert ex and ex[0]["snippet"]["match"].lower().startswith("answer")
+    sm = c.get("/traces/summary").json()
+    assert sm["available"] and sm["topics"] and "answer_provenance" in sm
+    xs = c.get("/traces/exchanges").json()
+    assert len(xs["exchanges"]) == 1 and xs["exchanges"][0]["a"]["label"] == "AgentAlpha07"
+    assert "not proof of a conversation" in xs["definition"]
+    assert c.get("/traces/hosts", params={"min_labels": 2}).status_code == 200
+
+
+def test_topics_endpoints_degrade_when_analysis_not_built(tmp_path):
+    c, _ = _client(tmp_path)
+    assert c.get("/topics/matrix").json()["available"] is False
+    assert c.get("/traces/summary").json()["available"] is False
+    assert c.get("/traces/exchanges").json()["exchanges"] == []

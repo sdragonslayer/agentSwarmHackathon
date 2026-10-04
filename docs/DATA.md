@@ -35,6 +35,8 @@ Each real run writes a `SNAPSHOT.json` recording the URL, retrieval time, compre
 
 ## Notes per source
 
+**Wiki (uncompressed local copy).** If you downloaded the whole export as plain `.jsonl` files into `data/raw/full-wiki-logs/` (with `SHA256SUMS` and `manifest.json`), skip `fetch wiki` and use `backend.ingest.wiki` directly; see `docs/wiki_findings.md` for what was verified.
+
 **Wiki.** After downloading, the tool compares the decompressed hashes of `revisions.jsonl` and `events.jsonl` with the snapshot inspected in the brief (manifest dated 2026-09-03). A mismatch only produces a warning. It means the publisher released a newer snapshot: keep it, then reconcile the counts. Don't force them to match.
 
 **Transluce.** Use `all-reports.csv` alone; don't also concatenate the component catalogs. Its confidence labels are qualitative judgments, not probabilities or confirmed identities.

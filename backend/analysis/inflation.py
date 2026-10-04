@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import duckdb
 
+from backend.display import stream_label
+
 
 def headline(con: duckdb.DuckDBPyConnection, top: int = 15) -> dict:
     lines = con.execute(
@@ -20,7 +22,7 @@ def headline(con: duckdb.DuckDBPyConnection, top: int = 15) -> dict:
     ).fetchall()
     by_stream = [
         {
-            "stream": s, "items": i, "lines": int(ln), "inherited_lines": int(inh), "novel_lines": int(nov),
+            "stream": s, "label": stream_label(s), "items": i, "lines": int(ln), "inherited_lines": int(inh), "novel_lines": int(nov),
             "restored_lines": int(res), "inherited_share": round(inh / ln, 4) if ln else None,
         }
         for s, i, ln, inh, nov, res in lines

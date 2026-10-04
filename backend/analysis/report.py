@@ -18,6 +18,7 @@ import duckdb
 
 from backend.analysis import inflation, questions
 from backend.db import DEFAULT_DB, connect
+from backend.display import source_label
 
 REPORT_VERSION = "report-0.1"
 MAX_CASES = 12
@@ -101,6 +102,8 @@ def case_payload(con: duckdb.DuckDBPyConnection, artifact_id: str, case_kind: st
 
 def build_payload(con: duckdb.DuckDBPyConnection) -> dict:
     snap = con.execute("SELECT snapshot_id, source, retrieved_at, importer_version FROM snapshot").fetchone()
+    coverage = con.execute("SELECT coverage_notes FROM snapshot").fetchone()[0]
+    generated = con.execute("SELECT count(*) FROM text_item WHERE generated").fetchone()[0]
     scope = {
         t: con.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
         for t in ("event", "text_item", "actor_label", "artifact", "appearance", "evidence_edge")
@@ -109,6 +112,7 @@ def build_payload(con: duckdb.DuckDBPyConnection) -> dict:
         "report_version": REPORT_VERSION,
         "generated_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "snapshot": dict(zip(["snapshot_id", "source", "retrieved_at", "importer_version"], snap, strict=True)),
+        "source_label": source_label(snap[1]), "coverage_notes": coverage, "generated_items": generated,
         "scope": scope,
         "inflation": inflation.headline(con, top=12),
         "cases": [case_payload(con, a, k) for a, k in pick_cases(con)],

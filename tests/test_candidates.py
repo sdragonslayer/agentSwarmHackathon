@@ -23,7 +23,7 @@ def _con(tmp_path):
 def _add_chat(con, n, actor, text, minute):
     ts = f"2026-01-01 00:{minute:02d}:00"
     con.execute(
-        "INSERT INTO text_item VALUES (?, 's', 'chat_agent', ?, NULL, NULL, NULL, ?, ?::TIMESTAMP, ?, 'h', ?, FALSE, NULL, "
+        "INSERT INTO text_item (item_id, snapshot_id, kind, actor_label_id, event_id, room_id, session_id, source_time, time_ts, text, text_sha256, text_len, generated, stream_key, source_file, source_table, source_id) VALUES (?, 's', 'chat_agent', ?, NULL, NULL, NULL, ?, ?::TIMESTAMP, ?, 'h', ?, FALSE, NULL, "
         "'f', 't', 'i')",
         [f"av:chat:x{n}", actor, ts, ts, text, len(text)],
     )

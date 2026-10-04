@@ -76,10 +76,29 @@ def test_build_handles_many_rows_before_first_float(tmp_path):
     texts = [first, second]
     for (iid, key, ts), text in zip(rows, texts, strict=True):
         con.execute(
-            "INSERT INTO text_item VALUES (?, 's', 'memory', NULL, NULL, NULL, NULL, ?, ?::TIMESTAMP, ?, 'h', ?, FALSE, ?, "
+            "INSERT INTO text_item (item_id, snapshot_id, kind, actor_label_id, event_id, room_id, session_id, source_time, time_ts, text, text_sha256, text_len, generated, stream_key, source_file, source_table, source_id) VALUES (?, 's', 'memory', NULL, NULL, NULL, NULL, ?, ?::TIMESTAMP, ?, 'h', ?, FALSE, ?, "
             "'f', 't', 'i')",
             [iid, ts, ts, text, len(text), key],
         )
     lineage.build(con)
     got = con.execute("SELECT classification, count(*) FROM text_change GROUP BY 1 ORDER BY 1").fetchall()
     assert dict(got) == {"first_observed": 150, "modified": 1, "new": 1}
+
+
+def test_explicit_base_page_created_vs_incomplete():
+    a, b = "the first revision line is long enough", "a second distinct line that is also long"
+    created = classify_stream([("r1", f"{a}\n{b}", None, "page_created"), ("r2", f"{a}", "r1", "explicit")])
+    assert created[0].status == "page_created" and {c[2] for c in created[0].changes} == {"new"}
+    assert created[1].status == "explicit_base" and created[1].base_item_id == "r1" and created[1].n_inherited == 1
+    incomplete = classify_stream([("r1", f"{a}\n{b}", None, "incomplete")])
+    assert incomplete[0].status == "first_in_stream" and {c[2] for c in incomplete[0].changes} == {"first_observed"}
+
+
+def test_explicit_base_must_be_immediate_predecessor():
+    import pytest
+
+    with pytest.raises(ValueError):
+        classify_stream([("r1", "x" * 30, None, "page_created"), ("r2", "y" * 30, "r1", "explicit"),
+                         ("r3", "z" * 30, "r1", "explicit")])
+    with pytest.raises(ValueError):
+        classify_stream([("r1", "x" * 30, None, "page_created"), ("r2", "y" * 30, None, "page_created")])

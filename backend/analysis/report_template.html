@@ -80,7 +80,7 @@ select { background: var(--surface); color: var(--ink); border: 1px solid var(--
 <body>
 <div class="viz-root">
 <main>
-  <h1>SwarmScope: AI Village results</h1>
+  <h1 id="title">SwarmScope results</h1>
   <p class="sub" id="scope"></p>
 
   <div class="hero">
@@ -90,8 +90,8 @@ select { background: var(--surface); color: var(--ink); border: 1px solid var(--
   <div class="kpis" id="kpis"></div>
 
   <h2>How much repeated text inflates apparent spread</h2>
-  <p class="sub">Agents rewrite their memory notes and session goals again and again, and each rewrite repeats most of
-    the previous text. Counting every repeat as a new appearance overstates how often anything appears. This is
+  <p class="sub">Text streams (agent memories, session goals, wiki page revisions) are rewritten again and again, and each
+    version repeats most of the previous one. Counting every repeat as a new appearance overstates how often anything appears. This is
     <b>occurrence inflation</b>: a count of text occurrences, not an estimate of false transmission.</p>
 
   <div class="card">
@@ -217,14 +217,16 @@ function table(cols, rows) {
 
 // ---- header, hero, KPIs ----
 const inf = DATA.inflation;
-$("scope").textContent = "Source: " + DATA.snapshot.source + " snapshot " + DATA.snapshot.snapshot_id +
-  ". Scope: all loaded text tables (computer-use turns, Claude Code messages and screenshots are not loaded). " +
-  "LLM-generated summaries are excluded.";
-const lineTot = inf.line_level_by_stream.reduce((a, r) => ({ lines: a.lines + r.lines, inh: a.inh + r.inherited_lines }),
-  { lines: 0, inh: 0 });
+$("title").textContent = "SwarmScope: " + DATA.source_label + " results"; document.title = $("title").textContent;
+$("scope").textContent = "Source: " + DATA.source_label + ", snapshot " + DATA.snapshot.snapshot_id + ". " + DATA.coverage_notes +
+  (DATA.generated_items ? " " + fmt(DATA.generated_items) + " LLM-generated item(s) are loaded but excluded from artifact extraction." : "");
+const lineTot = inf.line_level_by_stream.reduce((a, r) => ({ lines: a.lines + r.lines, inh: a.inh + r.inherited_lines, rest: a.rest + r.restored_lines }),
+  { lines: 0, inh: 0, rest: 0 });
+const streamNames = inf.line_level_by_stream.map((r) => r.label.toLowerCase()).join(" and ");
 $("hero-v").textContent = lineTot.lines ? pct(lineTot.inh / lineTot.lines) : "n/a";
-$("hero-l").textContent = "of " + fmt(lineTot.lines) + " lines in agent memories and session goals are carried forward " +
-  "unchanged from the same label's previous version. They are not new utterances.";
+$("hero-l").textContent = "of " + fmt(lineTot.lines) + " lines in " + (streamNames || "the loaded text streams") + " are carried forward unchanged " +
+  "from the previous version of the same text. They are not new utterances." +
+  (lineTot.rest ? " A further " + pct(lineTot.rest / lineTot.lines) + " are restored (they reappear after being removed), which is not new authorship either." : "");
 const urlType = inf.artifact_level_by_type.find((t) => t.artifact_type === "url");
 const kp = [
   ["Events loaded", fmt(DATA.scope.event), "source timeline, with gaps in event_index"],
@@ -240,7 +242,7 @@ kp.forEach(([l, v, d]) => {
 });
 
 // ---- chart: carried-forward share per stream (100% stacked horizontal bars) ----
-const STREAM_NAMES = { mem: "Agent memories", sgoal: "Computer-use session goals" };
+const STREAM_NAMES = Object.fromEntries(DATA.inflation.line_level_by_stream.map((r) => [r.stream, r.label]));
 function renderLines() {
   const rows = inf.line_level_by_stream;
   const W = 960, L = 200, R = 70, BAR = 24, GAP = 22, top = 8, H = top + rows.length * (BAR + GAP) + 24;

@@ -20,7 +20,7 @@ from pathlib import Path
 
 import duckdb
 
-from backend.db import DEFAULT_DB, connect
+from backend.db import DEFAULT_DB, clear_all, connect
 from backend.ingest.snapshot import IMPORTER_VERSION, sha256_file, utc_now
 
 SOURCE = "aivillage"
@@ -63,26 +63,29 @@ def load(raw: Path, db_path: Path = DEFAULT_DB, *, hash_files: bool = True) -> d
             rec["sha256_compressed"] = sha256_file(raw / f)
         files.append(rec)
     snap = f"av:{utc_now()}"
-    notes = (
-        "Local download of aidigestorg/ai-village text tables. Not loaded: computer_use_turns, claude_code_*, "
-        "screenshots. event_index has gaps (events missing from the release). Times are DB created_at (UTC)."
-    )
     con.execute(
         "INSERT INTO snapshot VALUES (?, ?, ?, ?, ?, ?, ?)",
-        [snap, SOURCE, utc_now(), IMPORTER_VERSION, json.dumps(files), TERMS, notes],
+        [snap, SOURCE, utc_now(), IMPORTER_VERSION, json.dumps(files), TERMS, "pending"],
     )
     _load_events(con, raw, snap)
+    gaps = con.execute(
+        "SELECT count(*) FROM (SELECT event_index - lag(event_index) OVER (ORDER BY event_index) AS d FROM event) "
+        "WHERE d > 1"
+    ).fetchone()[0]
+    notes = (
+        "Local download of the aidigestorg/ai-village text tables ("
+        + ", ".join(f["name"].replace(".jsonl.gz", "") for f in files)
+        + f"). event_index has {gaps} gaps (events missing from the release). Times are database created_at "
+        "values read as UTC."
+    )
+    con.execute("UPDATE snapshot SET coverage_notes = ?", [notes])
     _load_actors(con, raw, snap)
     _load_items(con, raw, snap)
     return counts(con)
 
 
 def _clear(con: duckdb.DuckDBPyConnection) -> None:
-    for t in (
-        "review", "evidence_edge", "artifact_counts", "appearance", "artifact", "lineage_summary", "text_change",
-        "text_item", "event", "actor_label_name", "actor_label", "snapshot",
-    ):
-        con.execute(f"DELETE FROM {t}")
+    clear_all(con)
 
 
 def _load_events(con: duckdb.DuckDBPyConnection, raw: Path, snap: str) -> None:
@@ -179,7 +182,9 @@ def _load_items(con: duckdb.DuckDBPyConnection, raw: Path, snap: str) -> None:
     def insert(select: str, params: list | None = None) -> None:
         con.execute(
             f"""
-            INSERT INTO text_item
+            INSERT INTO text_item (item_id, snapshot_id, kind, actor_label_id, event_id, room_id, session_id,
+                source_time, time_ts, text, text_sha256, text_len, generated, stream_key, source_file, source_table,
+                source_id)
             SELECT item_id, ?, kind, actor, event_id, room_id, session_id, source_time, try_cast(source_time AS TIMESTAMP),
                    text, sha256(text), length(text), generated, stream_key, source_file, source_table, source_id
             FROM ({select}) AS t(item_id, kind, actor, event_id, room_id, session_id, source_time, text, generated,

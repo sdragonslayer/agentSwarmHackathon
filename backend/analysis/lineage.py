@@ -11,8 +11,11 @@ each item is split into lines and each line is classified against the stream's e
 - first_observed: every line of the first item in a stream. Earlier items may exist outside the release, so
   this is an *incomplete lineage*, not "newly written".
 
-The predecessor is inferred from recorded time within a (label, kind) stream. The release has no explicit base
-pointer, so every classification here has attribution_basis `inferred_predecessor_by_recorded_time`.
+The predecessor is inferred from recorded time within a (label, kind) stream when the source gives no base pointer
+(AI Village): attribution_basis `inferred_predecessor_by_recorded_time`. Sources with explicit revision lineage
+(the wiki's diff_base) set `stream_seq`, `base_item_id` and `base_note`: an explicit base must be the immediate
+predecessor in the stream (the adapter checks this; a mismatch raises), and a first item marked `page_created`
+means the whole text really is new (complete lineage), unlike a first item whose earlier history is missing.
 """
 
 from __future__ import annotations
@@ -26,6 +29,12 @@ from rapidfuzz import fuzz, process
 
 LINEAGE_VERSION = "lineage-0.1"
 ATTRIBUTION_BASIS = "inferred_predecessor_by_recorded_time"
+BASIS_BY_STATUS = {
+    "first_in_stream": ATTRIBUTION_BASIS,
+    "inferred_predecessor": ATTRIBUTION_BASIS,
+    "explicit_base": "explicit_diff_base",
+    "page_created": "page_created",
+}
 MODIFIED_CUTOFF = 80.0
 MIN_FUZZY_LEN = 20
 FLUSH_ROWS = 200_000
@@ -63,14 +72,22 @@ class StreamClassifier:
         self.prev_lines: set[str] = set()
         self.seen: set[str] = set()
 
-    def feed(self, item_id: str, text: str) -> ItemResult:
+    def feed(self, item_id: str, text: str, base_item_id: str | None = None, base_note: str | None = None) -> ItemResult:
         lines = split_lines(text)
         cur = {line for _, line in lines}
-        if self.prev_id is None:
+        if base_note == "page_created" and self.prev_id is not None:
+            raise ValueError(f"{item_id}: page_created is only valid for the first item of a stream")
+        if base_item_id is not None and base_item_id != self.prev_id:
+            raise ValueError(f"{item_id}: explicit base {base_item_id} is not the immediate predecessor {self.prev_id}")
+        if self.prev_id is None and base_note == "page_created":
+            res = ItemResult(item_id, None, "page_created", n_lines=len(lines))
+            res.changes = [(n, line, "new", None) for n, line in lines]
+        elif self.prev_id is None:
             res = ItemResult(item_id, None, "first_in_stream", n_lines=len(lines))
             res.changes = [(n, line, "first_observed", None) for n, line in lines]
         else:
-            res = ItemResult(item_id, self.prev_id, "inferred_predecessor", n_lines=len(lines))
+            status = "explicit_base" if base_item_id is not None else "inferred_predecessor"
+            res = ItemResult(item_id, self.prev_id, status, n_lines=len(lines))
             dropped = list(self.prev_lines - cur)
             for n, line in lines:
                 if line in self.prev_lines:
@@ -91,9 +108,10 @@ class StreamClassifier:
         return res
 
 
-def classify_stream(items: Iterable[tuple[str, str]]) -> list[ItemResult]:
+def classify_stream(items: Iterable[tuple]) -> list[ItemResult]:
+    """Items are (item_id, text) or (item_id, text, base_item_id, base_note)."""
     c = StreamClassifier()
-    return [c.feed(i, t) for i, t in items]
+    return [c.feed(*it) for it in items]
 
 
 def build(con: duckdb.DuckDBPyConnection) -> dict[str, int]:
@@ -102,8 +120,8 @@ def build(con: duckdb.DuckDBPyConnection) -> dict[str, int]:
     con.execute("DELETE FROM lineage_summary")
     reader = con.cursor()
     reader.execute(
-        "SELECT stream_key, item_id, text FROM text_item WHERE stream_key IS NOT NULL "
-        "ORDER BY stream_key, time_ts, item_id"
+        "SELECT stream_key, item_id, text, base_item_id, base_note FROM text_item WHERE stream_key IS NOT NULL "
+        "ORDER BY stream_key, stream_seq NULLS LAST, time_ts, item_id"
     )
     change_rows: list[tuple] = []
     summary_rows: list[tuple] = []
@@ -138,12 +156,13 @@ def build(con: duckdb.DuckDBPyConnection) -> dict[str, int]:
             summary_rows.clear()
 
     while rows := reader.fetchmany(500):
-        for stream, item_id, text in rows:
+        for stream, item_id, text, explicit_base, base_note in rows:
             if stream != current:
                 current, clf = stream, StreamClassifier()
-            r = clf.feed(item_id, text)
+            r = clf.feed(item_id, text, explicit_base, base_note)
+            basis = BASIS_BY_STATUS[r.status]
             for n, line, cls, sim in r.changes:
-                change_rows.append((item_id, r.base_item_id, n, line, cls, sim, ATTRIBUTION_BASIS, LINEAGE_VERSION))
+                change_rows.append((item_id, r.base_item_id, n, line, cls, sim, basis, LINEAGE_VERSION))
             counts = {k: r.count(k) for k in ("new", "modified", "restored", "first_observed")}
             summary_rows.append(
                 (item_id, stream, r.base_item_id, r.status, r.n_lines, r.n_inherited, counts["new"],

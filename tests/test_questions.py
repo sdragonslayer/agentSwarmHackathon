@@ -26,10 +26,11 @@ def test_questionnaire_answers_and_abstains(tmp_path):
     assert by_id["earliest"]["citations"][0]["item_id"].endswith("0001")
     assert "2 author label" in by_id["introducers"]["claim"]
     # Unanswerable from the loaded data: abstain rather than guess.
-    for q in ("references", "resemble", "claimed_use", "observed_use", "warnings"):
+    for q in ("references", "resemble", "warnings", "activity"):
         assert by_id[q]["status"] == "unknown", q
     # Carryover is named as a competing explanation with real numbers.
     assert "2 of 7 total occurrences are carried-forward" in by_id["alternatives"]["claim"]
+    assert "claimed_use" not in by_id and "observed_use" not in by_id
     assert all(a["limitations"] for a in answers)
 
 

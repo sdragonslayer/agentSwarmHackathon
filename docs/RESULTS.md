@@ -56,8 +56,8 @@ edges. No `possible_reuse` edges were built globally; similarity retrieval runs 
 - **No human-reviewed precision yet.** Edge and artifact quality are checked for integrity, not accuracy. A hand
   sample of 25 hex ids looked like real git SHAs/hash prefixes (0 obvious false positives); that is a spot check, not
   a measured rate.
-- No claim/use detection and no `observed_use`: `computer_use_turns` is not loaded, so "did anyone act on this" is
-  unanswerable and the questionnaire abstains.
+- No claim/use detection and no `observed_use` edges (`computer_use_turns` is not loaded). Those two questions were removed
+  from the questionnaire; "did anyone act on this" is out of scope for this data.
 - Cases in the report are the most inspectable shared artifacts, not a representative sample of agent behavior.
 - Dates are recorded database times; the release has 19,131 gaps in `event_index`.
 - The card says 31 agents, the release has 46 labels; no merging is attempted.
@@ -83,3 +83,12 @@ Extraction is the one step worth optimizing before running on other large corpor
   chat to memory to another label's memory, and a village-wide shared repo.
 - Figures: `data/derived/results/figures/` (report light/dark, app overview, five demo cases, review page); tables:
   `data/derived/results/*.csv` and `results.json`.
+
+## Second dataset: German message board (collusion.wiki)
+Full details in `docs/wiki_findings.md`. Short version: the same pipeline runs unchanged on a different source (3 s ingest,
+8 s build; 16 integrity gates pass, including raw-file checks of hashes, hunk offsets, bases and manifest counts).
+- 43.2% of 185,849 lines are carried forward and 25.1% restored; URLs are inflated 2.7× and hex ids 6.6×.
+- Unlike AI Village, carryover **does** cross labels here: URLs in revisions of 2+ labels are 8,292 naively vs 3,485
+  counting only text a label wrote (2.4×); one proxy URL is in the revisions of 26 labels but written by 8.
+- 12,774 `same_content` edges, none `sequence_ordered` (no cross-page source sequence), so none carries an
+  established order.

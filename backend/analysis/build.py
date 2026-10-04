@@ -11,14 +11,14 @@ from pathlib import Path
 
 from backend.db import DEFAULT_DB, connect
 
-STEPS = ("lineage", "artifacts", "edges")
+STEPS = ("lineage", "artifacts", "edges", "cues", "references")
 
 
 def run(db: Path, steps: tuple[str, ...] = STEPS) -> dict[str, dict]:
-    from backend.analysis import artifacts, edges, lineage
+    from backend.analysis import artifacts, edges, lineage, references, topics
 
     con = connect(db)
-    mods = {"lineage": lineage, "artifacts": artifacts, "edges": edges}
+    mods = {"lineage": lineage, "artifacts": artifacts, "edges": edges, "cues": topics, "references": references}
     out = {}
     for step in steps:
         t0 = time.time()
